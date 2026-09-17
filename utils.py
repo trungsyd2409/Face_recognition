@@ -12,8 +12,9 @@ Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
 - draw_hand_landmarks: vẽ khung xương/khớp ngón tay lên frame
 - log_hand_gesture: ghi lại kết quả nhận diện cử chỉ tay vào file CSV riêng
 - get_two_hand_quad_points: khi có đủ 2 tay (trái + phải), tính 4 điểm góc tứ giác
-  nối đầu ngón trỏ/ngón cái của 2 tay
-- invert_quad_region: đảo màu vùng ảnh nằm trong 1 tứ giác
+  nối 1 cặp đầu ngón tay bất kỳ (mặc định: ngón cái + ngón trỏ) của 2 tay
+- invert_quad_region: đảo màu (âm bản) vùng ảnh nằm trong 1 tứ giác
+- zero_color_channel_in_quad: đặt 1 kênh màu (r/g/b) về 0 cho vùng ảnh trong 1 tứ giác
 - draw_quad_outline: vẽ đường viền khép kín nối các điểm của tứ giác
 
 Lưu ý: từ OpenCV 5.0, CascadeClassifier (Haar Cascade) đã bị chuyển sang module
@@ -311,11 +312,14 @@ def log_hand_gesture(gesture):
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), gesture])
 
 
-# ==================== Tứ giác 2 tay + đảo màu vùng bên trong ====================
+# ==================== Tứ giác 2 tay + hiệu ứng màu vùng bên trong ====================
 
-# Chỉ số landmark: 4 = đầu ngón cái (thumb tip), 8 = đầu ngón trỏ (index tip)
-_THUMB_TIP_ID = 4
-_INDEX_TIP_ID = 8
+# Chỉ số landmark đầu các ngón tay (tip), dùng để ghép cặp tạo tứ giác giữa 2 tay
+THUMB_TIP_ID = 4
+INDEX_TIP_ID = 8
+MIDDLE_TIP_ID = 12
+RING_TIP_ID = 16
+PINKY_TIP_ID = 20
 
 
 def _landmark_to_pixel(landmark, width, height):
@@ -323,20 +327,34 @@ def _landmark_to_pixel(landmark, width, height):
     return (int(landmark.x * width), int(landmark.y * height))
 
 
-def get_two_hand_quad_points(left_landmarks, right_landmarks, width, height):
+def get_two_hand_quad_points(left_landmarks, right_landmarks, width, height,
+                              tip_id_a=INDEX_TIP_ID, tip_id_b=THUMB_TIP_ID):
     """
     Khi có đủ landmark của 2 tay (trái + phải), trả về 4 điểm (pixel) tạo thành
-    1 tứ giác, theo đúng thứ tự:
-        đầu ngón trỏ tay trái -> đầu ngón cái tay trái ->
-        đầu ngón cái tay phải -> đầu ngón trỏ tay phải
+    1 tứ giác dựa trên 2 đầu ngón tay `tip_id_a` và `tip_id_b`, theo thứ tự:
+        đầu ngón A tay trái -> đầu ngón B tay trái ->
+        đầu ngón B tay phải -> đầu ngón A tay phải
     (rồi khép kín lại về điểm đầu tiên).
-    """
-    left_index_tip = _landmark_to_pixel(left_landmarks[_INDEX_TIP_ID], width, height)
-    left_thumb_tip = _landmark_to_pixel(left_landmarks[_THUMB_TIP_ID], width, height)
-    right_thumb_tip = _landmark_to_pixel(right_landmarks[_THUMB_TIP_ID], width, height)
-    right_index_tip = _landmark_to_pixel(right_landmarks[_INDEX_TIP_ID], width, height)
 
-    return [left_index_tip, left_thumb_tip, right_thumb_tip, right_index_tip]
+    Mặc định tip_id_a = ngón trỏ, tip_id_b = ngón cái - tương ứng tứ giác
+    "ngón cái - ngón trỏ" giữa 2 tay (tính năng gốc). Truyền các cặp ID khác
+    (INDEX_TIP_ID/MIDDLE_TIP_ID, MIDDLE_TIP_ID/RING_TIP_ID, RING_TIP_ID/PINKY_TIP_ID)
+    để lấy tứ giác giữa các cặp ngón còn lại.
+    """
+    left_a = _landmark_to_pixel(left_landmarks[tip_id_a], width, height)
+    left_b = _landmark_to_pixel(left_landmarks[tip_id_b], width, height)
+    right_b = _landmark_to_pixel(right_landmarks[tip_id_b], width, height)
+    right_a = _landmark_to_pixel(right_landmarks[tip_id_a], width, height)
+
+    return [left_a, left_b, right_b, right_a]
+
+
+def _quad_mask(frame, quad_points):
+    """Tạo mask (ảnh xám 0/255) đánh dấu vùng bên trong tứ giác `quad_points`."""
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    pts = np.array([quad_points], dtype=np.int32)
+    cv2.fillPoly(mask, pts, 255)
+    return mask.astype(bool)
 
 
 def invert_quad_region(frame, quad_points):
@@ -344,12 +362,26 @@ def invert_quad_region(frame, quad_points):
     Đảo màu (invert - giống hiệu ứng "âm bản") toàn bộ vùng ảnh nằm bên trong
     tứ giác `quad_points` (danh sách 4 điểm pixel (x, y)). Vẽ trực tiếp lên `frame`.
     """
-    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-    pts = np.array([quad_points], dtype=np.int32)
-    cv2.fillPoly(mask, pts, 255)
-
-    mask_bool = mask.astype(bool)
+    mask_bool = _quad_mask(frame, quad_points)
     frame[mask_bool] = 255 - frame[mask_bool]
+
+
+# Tên kênh màu (r/g/b, không phân biệt hoa thường) -> chỉ số kênh trong ảnh BGR
+# của OpenCV (kênh 0 = B, 1 = G, 2 = R).
+_CHANNEL_NAME_TO_BGR_INDEX = {"b": 0, "g": 1, "r": 2}
+
+
+def zero_color_channel_in_quad(frame, quad_points, channel):
+    """
+    Đặt kênh màu `channel` ("r", "g", hoặc "b") về 0 cho toàn bộ vùng ảnh nằm
+    bên trong tứ giác `quad_points`. Vẽ trực tiếp lên `frame`.
+
+    Lưu ý: ảnh của OpenCV lưu theo thứ tự kênh BGR (không phải RGB), hàm này tự
+    quy đổi tên kênh r/g/b sang đúng chỉ số kênh tương ứng.
+    """
+    channel_index = _CHANNEL_NAME_TO_BGR_INDEX[channel.lower()]
+    mask_bool = _quad_mask(frame, quad_points)
+    frame[mask_bool, channel_index] = 0
 
 
 def draw_quad_outline(frame, quad_points, color=(255, 255, 255), thickness=2):
