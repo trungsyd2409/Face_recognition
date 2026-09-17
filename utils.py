@@ -196,20 +196,8 @@ _HAND_CONNECTIONS = mp_vision.HandLandmarksConnections.HAND_CONNECTIONS
 _FINGER_TIP_IDS = [4, 8, 12, 16, 20]
 
 
-_hand_landmarker_mode = None  # "video" hoặc "image" - mode hiện tại của _hand_landmarker
-
-
-def _get_hand_landmarker(running_mode="video"):
-    """
-    Lấy (hoặc khởi tạo) HandLandmarker. `running_mode`:
-    - "video": dùng cho luồng frame LIÊN TỤC từ 1 nguồn duy nhất (vd. webcam
-      desktop trong main_webcam.py) - có theo dõi (tracking) mượt hơn giữa các
-      frame, nhưng yêu cầu timestamp tăng dần đúng thứ tự của 1 luồng.
-    - "image": xử lý từng ảnh ĐỘC LẬP, không giả định thứ tự/luồng liên tục -
-      phù hợp cho backend web nhận request rời rạc từ (có thể) nhiều phiên
-      trình duyệt khác nhau.
-    """
-    global _hand_landmarker, _hand_landmarker_mode
+def _get_hand_landmarker():
+    global _hand_landmarker
 
     if not os.path.isfile(HAND_MODEL_PATH):
         raise FileNotFoundError(
@@ -217,33 +205,23 @@ def _get_hand_landmarker(running_mode="video"):
             "Hãy chạy lệnh sau 1 lần trước khi dùng: python download_model.py"
         )
 
-    if _hand_landmarker is None or _hand_landmarker_mode != running_mode:
-        if _hand_landmarker is not None:
-            _hand_landmarker.close()
-
-        mode_enum = (
-            mp_vision.RunningMode.VIDEO if running_mode == "video" else mp_vision.RunningMode.IMAGE
-        )
+    if _hand_landmarker is None:
         options = mp_vision.HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=HAND_MODEL_PATH),
-            running_mode=mode_enum,
+            running_mode=mp_vision.RunningMode.VIDEO,
             num_hands=2,
             min_hand_detection_confidence=0.6,
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
         )
         _hand_landmarker = mp_vision.HandLandmarker.create_from_options(options)
-        _hand_landmarker_mode = running_mode
 
     return _hand_landmarker
 
 
-def detect_hands(frame, running_mode="video"):
+def detect_hands(frame):
     """
     Phát hiện bàn tay trong 1 frame (ảnh BGR từ OpenCV) bằng MediaPipe HandLandmarker.
-    `running_mode` = "video" (mặc định, dùng cho main_webcam.py) hoặc "image"
-    (dùng cho backend web - xem docstring của `_get_hand_landmarker`).
-
     Trả về danh sách dict, mỗi dict ứng với 1 bàn tay:
         {"landmarks": list 21 điểm landmark (toạ độ chuẩn hoá 0-1, có .x/.y/.z),
          "handedness": "Left" hoặc "Right",
@@ -251,19 +229,17 @@ def detect_hands(frame, running_mode="video"):
     """
     global _last_hand_timestamp_ms
 
-    landmarker = _get_hand_landmarker(running_mode)
+    landmarker = _get_hand_landmarker()
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
-    if running_mode == "video":
-        # timestamp (ms) phải tăng dần qua từng lần gọi ở chế độ VIDEO
-        timestamp_ms = int(time.time() * 1000)
-        if timestamp_ms <= _last_hand_timestamp_ms:
-            timestamp_ms = _last_hand_timestamp_ms + 1
-        _last_hand_timestamp_ms = timestamp_ms
-        result = landmarker.detect_for_video(mp_image, timestamp_ms)
-    else:
-        result = landmarker.detect(mp_image)
+    # timestamp (ms) phải tăng dần qua từng lần gọi ở chế độ VIDEO
+    timestamp_ms = int(time.time() * 1000)
+    if timestamp_ms <= _last_hand_timestamp_ms:
+        timestamp_ms = _last_hand_timestamp_ms + 1
+    _last_hand_timestamp_ms = timestamp_ms
+
+    result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
     hands_info = []
     if result.hand_landmarks and result.handedness:
