@@ -1,0 +1,12 @@
+Thư mục này chứa ảnh mẫu để hệ thống nhận diện khuôn mặt.
+
+Cách thêm người mới:
+1. Chuẩn bị 1 ảnh chân dung rõ mặt (chỉ 1 người trong ảnh, ánh sáng tốt).
+2. Đặt tên file theo tên người, ví dụ: An.jpg, Binh.png
+3. Bỏ file ảnh vào thư mục known_faces/ này (cùng cấp với file này).
+
+Tên hiển thị khi nhận diện = tên file (không tính phần đuôi .jpg/.png).
+Ví dụ: file "An.jpg" -> khi nhận diện đúng sẽ hiện chữ "An".
+
+Sau khi thêm ảnh xong, bạn có thể xoá file HUONG_DAN.txt này đi, nó không ảnh hưởng
+gì đến code (DeepFace sẽ tự bỏ qua các file không phải ảnh khi có lỗi đọc).
