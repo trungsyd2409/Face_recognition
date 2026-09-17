@@ -1,9 +1,15 @@
 """
 utils.py
 Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
-- detect_faces: tìm vị trí khuôn mặt trong 1 frame (dùng OpenCV Haar Cascade)
+- detect_faces: tìm vị trí khuôn mặt trong 1 frame (dùng FaceDetectorYN - model YuNet)
 - recognize_face: so khớp 1 khuôn mặt đã crop với ảnh trong known_faces/ (dùng DeepFace)
 - log_recognition: ghi lại kết quả nhận diện vào file CSV
+
+Lưu ý: từ OpenCV 5.0, CascadeClassifier (Haar Cascade) đã bị chuyển sang module
+contrib riêng, không còn có sẵn trong opencv-python mặc định. Vì vậy project này
+dùng FaceDetectorYN - 1 model deep learning nhỏ gọn (YuNet), có sẵn trong
+opencv-python bản thường và cho kết quả chính xác hơn Haar Cascade cũ.
+Chạy `python download_model.py` một lần trước khi dùng để tải file model này về.
 """
 
 import os
@@ -13,13 +19,33 @@ from datetime import datetime
 import cv2
 from deepface import DeepFace
 
-# Bộ phát hiện khuôn mặt có sẵn trong OpenCV, không cần train, chạy nhanh, đủ dùng cho project nhỏ
-FACE_CASCADE = cv2.CascadeClassifier(
-    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "models", "face_detection_yunet_2026may.onnx")
 
-KNOWN_FACES_DIR = "known_faces"   # thư mục chứa ảnh mẫu, đặt tên file = tên người
-LOG_FILE = "recognition_log.csv"  # file log kết quả nhận diện
+KNOWN_FACES_DIR = os.path.join(BASE_DIR, "known_faces")
+LOG_FILE = os.path.join(BASE_DIR, "recognition_log.csv")
+
+_face_detector = None  # khởi tạo 1 lần duy nhất, dùng lại cho các lần detect sau
+
+
+def _get_face_detector(width, height):
+    global _face_detector
+
+    if not os.path.isfile(MODEL_PATH):
+        raise FileNotFoundError(
+            "Chưa có file model nhận diện khuôn mặt.\n"
+            "Hãy chạy lệnh sau 1 lần trước khi dùng: python download_model.py"
+        )
+
+    if _face_detector is None:
+        _face_detector = cv2.FaceDetectorYN.create(
+            MODEL_PATH, "", (width, height),
+            score_threshold=0.6, nms_threshold=0.3, top_k=5000,
+        )
+    else:
+        _face_detector.setInputSize((width, height))
+
+    return _face_detector
 
 
 def detect_faces(frame):
@@ -27,14 +53,20 @@ def detect_faces(frame):
     Phát hiện khuôn mặt trong 1 frame (ảnh BGR từ OpenCV).
     Trả về danh sách các box dạng (x, y, w, h).
     """
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = FACE_CASCADE.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(60, 60),
-    )
-    return faces
+    height, width = frame.shape[:2]
+    detector = _get_face_detector(width, height)
+
+    _, faces = detector.detect(frame)
+
+    boxes = []
+    if faces is not None:
+        for face in faces:
+            x, y, w, h = face[:4].astype(int)
+            # Toạ độ đôi khi âm nhẹ ở gần biên ảnh, giới hạn lại cho an toàn
+            x, y = max(x, 0), max(y, 0)
+            boxes.append((x, y, w, h))
+
+    return boxes
 
 
 def recognize_face(face_img):
@@ -43,7 +75,9 @@ def recognize_face(face_img):
     So khớp với các ảnh trong thư mục known_faces/ bằng DeepFace.
     Trả về tên người (lấy từ tên file ảnh) nếu khớp, ngược lại trả về "Unknown".
     """
-    # Nếu chưa có ảnh mẫu nào thì không thể nhận diện được ai
+    # Nếu ảnh crop rỗng (box lỗi) hoặc chưa có ảnh mẫu nào thì bỏ qua
+    if face_img.size == 0:
+        return "Unknown"
     if not os.path.isdir(KNOWN_FACES_DIR) or not os.listdir(KNOWN_FACES_DIR):
         return "Unknown"
 

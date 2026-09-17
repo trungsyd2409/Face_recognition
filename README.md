@@ -43,6 +43,25 @@ có thể mất vài phút. Đảm bảo máy còn đủ dung lượng và kết
 Vào thư mục `known_faces/`, đọc file `HUONG_DAN.txt` rồi bỏ ảnh của bạn (và bạn bè
 nếu muốn) vào đó. Đặt tên file = tên người, ví dụ `An.jpg`.
 
+## Bước 3.5: Tải model nhận diện khuôn mặt (chỉ cần chạy 1 lần)
+
+```bash
+python download_model.py
+```
+
+Script này tải file model YuNet (~230KB) về thư mục `models/`. Cần chạy đúng 1 lần
+duy nhất trước khi chạy `main_webcam.py` hoặc `main_static.py` lần đầu tiên.
+
+> **Vì sao cần bước này?** Từ OpenCV 5.0 trở đi, `CascadeClassifier` (cách phát
+> hiện khuôn mặt kiểu cũ - Haar Cascade) đã bị chuyển sang module `contrib` riêng,
+> không còn có sẵn trong `opencv-python` mặc định nữa. Project này dùng
+> `FaceDetectorYN` (model YuNet) thay thế — đây cũng là cách OpenCV chính thức
+> khuyến nghị, cho kết quả detect nhanh và chính xác hơn Haar Cascade cũ.
+
+Nếu script báo lỗi tải hoặc file quá nhỏ (do GitHub dùng Git LFS cho file này),
+mở link được in ra bằng trình duyệt, tải file `.onnx` về thủ công, rồi bỏ vào
+thư mục `models/`.
+
 ## Bước 4: Chạy với webcam (thời gian thực)
 
 ```bash
@@ -75,6 +94,9 @@ VS Code để xem.
 
 ## Xử lý lỗi thường gặp
 
+- **`AttributeError: module 'cv2' has no attribute 'CascadeClassifier'`**: bạn đang
+  dùng OpenCV 5.x — xem giải thích ở Bước 3.5, đảm bảo đã chạy `python download_model.py`
+  và file model đã có trong `models/`.
 - **"Không mở được webcam"**: kiểm tra ứng dụng khác có đang dùng camera không,
   hoặc cấp quyền camera cho terminal/VS Code trong Settings của hệ điều hành.
 - **Cài `deepface`/`tensorflow` bị lỗi**: thử nâng cấp pip trước
