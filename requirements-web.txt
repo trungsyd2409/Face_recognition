@@ -1,0 +1,14 @@
+# requirements-web.txt
+# Dùng riêng cho backend web (app.py), KHÁC với requirements.txt của bản
+# desktop (main_webcam.py / main_static.py):
+# - opencv-python-headless thay vì opencv-python: server không có màn hình/GUI
+#   nên không cần các thư viện Qt/GTK mà bản GUI yêu cầu (nhẹ hơn, cài ổn định
+#   hơn trong Docker).
+# - Thêm flask + gunicorn để chạy web server.
+
+opencv-python-headless
+deepface
+tf-keras
+mediapipe
+flask
+gunicorn

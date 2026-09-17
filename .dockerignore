@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+known_faces/
+models/
+*.csv
+main_webcam.py
+main_static.py
+README.md
+WEB_DEPLOY.md
+requirements.txt
