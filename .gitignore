@@ -3,7 +3,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+emotion_log
 # C extensions
 *.so
 
@@ -50,3 +50,4 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
