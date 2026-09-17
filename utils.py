@@ -4,18 +4,17 @@ Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
 - detect_faces: tìm vị trí khuôn mặt trong 1 frame (dùng FaceDetectorYN - model YuNet)
 - recognize_face: so khớp 1 khuôn mặt đã crop với ảnh trong known_faces/ (dùng DeepFace) - dùng cho main_static.py
 - log_recognition: ghi lại kết quả nhận diện danh tính vào file CSV
-- detect_emotion: phân tích cảm xúc (7 loại: angry, disgust, fear, happy, sad, surprise,
-  neutral) của 1 khuôn mặt đã crop (dùng DeepFace.analyze) - dùng cho main_webcam.py
-- log_emotion: ghi lại kết quả nhận diện cảm xúc vào file CSV riêng
 - detect_hands: phát hiện bàn tay + nhận diện cử chỉ cơ bản trong 1 frame (dùng
   MediaPipe Tasks API - HandLandmarker) - dùng cho main_webcam.py
-- draw_hand_landmarks: vẽ khung xương/khớp ngón tay lên frame
+- draw_hand_landmarks: vẽ khung xương/khớp ngón tay lên frame (hiện KHÔNG dùng
+  trong main_webcam.py nữa - chỉ giữ lại tứ giác + các đỉnh của tứ giác)
 - log_hand_gesture: ghi lại kết quả nhận diện cử chỉ tay vào file CSV riêng
 - get_two_hand_quad_points: khi có đủ 2 tay (trái + phải), tính 4 điểm góc tứ giác
   nối 1 cặp đầu ngón tay bất kỳ (mặc định: ngón cái + ngón trỏ) của 2 tay
 - invert_quad_region: đảo màu (âm bản) vùng ảnh nằm trong 1 tứ giác
 - zero_color_channel_in_quad: đặt 1 kênh màu (r/g/b) về 0 cho vùng ảnh trong 1 tứ giác
 - draw_quad_outline: vẽ đường viền khép kín nối các điểm của tứ giác
+- draw_quad_vertices: vẽ các chấm tròn đánh dấu 4 điểm góc (đỉnh) của tứ giác
 - is_pinching: kiểm tra 1 bàn tay có đang "chụm" ngón cái + ngón trỏ lại (chạm nhau)
   hay không
 - apply_quad_color_effect: áp 1 trong 13 hiệu ứng (COLOR_EFFECT_CYCLE) lên vùng
@@ -52,7 +51,6 @@ HAND_MODEL_PATH = os.path.join(BASE_DIR, "models", "hand_landmarker.task")
 
 KNOWN_FACES_DIR = os.path.join(BASE_DIR, "known_faces")
 LOG_FILE = os.path.join(BASE_DIR, "recognition_log.csv")
-EMOTION_LOG_FILE = os.path.join(BASE_DIR, "emotion_log.csv")
 HAND_LOG_FILE = os.path.join(BASE_DIR, "hand_log.csv")
 
 _face_detector = None  # khởi tạo 1 lần duy nhất, dùng lại cho các lần detect sau
@@ -138,49 +136,6 @@ def log_recognition(name):
         if not file_exists:
             writer.writerow(["timestamp", "name"])
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name])
-
-
-def detect_emotion(face_img):
-    """
-    Nhận vào 1 ảnh khuôn mặt đã crop (numpy array, BGR).
-    Phân tích cảm xúc bằng DeepFace.analyze() - trả về cảm xúc chiếm ưu thế nhất
-    trong 7 loại: angry, disgust, fear, happy, sad, surprise, neutral.
-
-    Trả về tuple (emotion, confidence):
-    - emotion: tên cảm xúc (str), hoặc "Unknown" nếu không phân tích được.
-    - confidence: độ tin cậy (%) của cảm xúc đó, dạng float (0-100).
-    """
-    if face_img.size == 0:
-        return "Unknown", 0.0
-
-    try:
-        results = DeepFace.analyze(
-            img_path=face_img,
-            actions=["emotion"],
-            enforce_detection=False,  # không bắt buộc phải detect lại (đã crop sẵn)
-            detector_backend="skip",  # bỏ qua detect lại (opencv/haarcascade không có sẵn), dùng thẳng ảnh đã crop
-            silent=True,
-        )
-        # DeepFace.analyze trả về list các dict (1 dict cho mỗi khuôn mặt tìm thấy)
-        if isinstance(results, list) and len(results) > 0:
-            result = results[0]
-            dominant_emotion = result["dominant_emotion"]
-            confidence = result["emotion"][dominant_emotion]
-            return dominant_emotion, confidence
-    except Exception as e:
-        print(f"[Lỗi khi phân tích cảm xúc]: {e}")
-
-    return "Unknown", 0.0
-
-
-def log_emotion(emotion):
-    """Ghi lại cảm xúc + thời gian nhận diện vào file CSV riêng (emotion_log.csv)."""
-    file_exists = os.path.isfile(EMOTION_LOG_FILE)
-    with open(EMOTION_LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["timestamp", "emotion"])
-        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), emotion])
 
 
 # ==================== Nhận diện bàn tay (MediaPipe Tasks - HandLandmarker) ====================
@@ -393,6 +348,16 @@ def draw_quad_outline(frame, quad_points, color=(255, 255, 255), thickness=2):
     """Vẽ đường viền khép kín nối lần lượt các điểm trong `quad_points`."""
     pts = np.array([quad_points], dtype=np.int32)
     cv2.polylines(frame, pts, isClosed=True, color=color, thickness=thickness)
+
+
+def draw_quad_vertices(frame, quad_points, color=(0, 200, 255), radius=8, thickness=-1):
+    """
+    Vẽ 1 chấm tròn đánh dấu tại mỗi điểm góc (đỉnh) của tứ giác `quad_points`
+    (danh sách 4 điểm pixel (x, y)) - dùng để làm nổi bật 4 đỉnh tứ giác thay
+    vì vẽ khung xương/khớp đầy đủ của bàn tay.
+    """
+    for point in quad_points:
+        cv2.circle(frame, tuple(point), radius, color, thickness)
 
 
 # ==================== Cử chỉ "chụm ngón" (pinch) 1 tay + hiệu ứng theo vùng tứ giác ====================
