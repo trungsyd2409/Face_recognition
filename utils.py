@@ -18,8 +18,9 @@ Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
 - draw_quad_outline: vẽ đường viền khép kín nối các điểm của tứ giác
 - is_pinching: kiểm tra 1 bàn tay có đang "chụm" ngón cái + ngón trỏ lại (chạm nhau)
   hay không
-- apply_quad_color_effect: áp 1 hiệu ứng màu (đảo màu, hoặc bỏ 1 kênh r/g/b) lên
-  vùng ảnh nằm trong 1 tứ giác
+- apply_quad_color_effect: áp 1 trong 13 hiệu ứng (COLOR_EFFECT_CYCLE) lên vùng
+  ảnh nằm trong 1 tứ giác: đảo màu, bỏ kênh r/g/b, pixelate, nhiễu hạt, xoáy,
+  sóng nước, blur, cạnh viền, heatmap nhiệt, grayscale, sepia
 
 Lưu ý: từ OpenCV 5.0, CascadeClassifier (Haar Cascade) đã bị chuyển sang module
 contrib riêng, không còn có sẵn trong opencv-python mặc định. Vì vậy project này
@@ -421,18 +422,161 @@ def is_pinching(landmarks, ratio_threshold=0.4):
     return (pinch_distance / hand_size) < ratio_threshold
 
 
-# Chuỗi hiệu ứng lặp vòng khi chụm ngón: đảo màu -> bỏ đỏ -> bỏ xanh lá -> bỏ
-# xanh dương -> quay lại đảo màu, ...
-COLOR_EFFECT_CYCLE = ["invert", "r0", "g0", "b0"]
+# Chuỗi hiệu ứng lặp vòng khi chụm ngón (giữ 4 hiệu ứng màu cơ bản trước, các
+# hiệu ứng "nặng" hơn - biến dạng/nhiễu/cách điệu - nối tiếp theo sau, rồi quay
+# vòng lại từ đầu):
+#   đảo màu -> bỏ đỏ -> bỏ xanh lá -> bỏ xanh dương ->
+#   pixelate -> nhiễu hạt -> xoáy -> sóng nước ->
+#   blur -> cạnh viền -> heatmap nhiệt -> grayscale -> sepia -> (quay lại đảo màu)
+COLOR_EFFECT_CYCLE = [
+    "invert", "r0", "g0", "b0",
+    "pixelate", "noise", "swirl", "wave",
+    "blur", "edge", "heatmap", "grayscale", "sepia",
+]
+
+
+def _bounding_rect(quad_points, frame_shape):
+    """Tính hình chữ nhật bao quanh (bounding box) của tứ giác `quad_points`,
+    giới hạn trong kích thước `frame_shape`. Trả về (x1, y1, x2, y2)."""
+    xs = [p[0] for p in quad_points]
+    ys = [p[1] for p in quad_points]
+    x1 = max(min(xs), 0)
+    y1 = max(min(ys), 0)
+    x2 = min(max(xs), frame_shape[1])
+    y2 = min(max(ys), frame_shape[0])
+    return x1, y1, x2, y2
+
+
+def _apply_roi_effect(frame, quad_points, roi_transform_fn):
+    """
+    Áp dụng 1 hàm biến đổi ảnh `roi_transform_fn` (nhận vào 1 vùng ảnh - ROI -
+    và trả về vùng ảnh đã biến đổi, cùng kích thước) lên hình chữ nhật bao
+    quanh tứ giác, sau đó chỉ dán ngược lại `frame` tại đúng các pixel nằm bên
+    trong tứ giác (dùng mask) - để hiệu ứng không tràn ra ngoài hình tứ giác
+    dù vùng tính toán là hình chữ nhật.
+    """
+    x1, y1, x2, y2 = _bounding_rect(quad_points, frame.shape)
+    if x2 <= x1 or y2 <= y1:
+        return
+
+    mask_bool = _quad_mask(frame, quad_points)
+    roi = frame[y1:y2, x1:x2]
+    roi_effect = roi_transform_fn(roi)
+
+    effect_frame = frame.copy()
+    effect_frame[y1:y2, x1:x2] = roi_effect
+    frame[mask_bool] = effect_frame[mask_bool]
+
+
+def _pixelate_roi(roi, pixel_size=14):
+    """Vỡ ảnh thành ô vuông to (thu nhỏ rồi phóng to lại) - hiệu ứng mosaic."""
+    h, w = roi.shape[:2]
+    small_w = max(1, w // pixel_size)
+    small_h = max(1, h // pixel_size)
+    small = cv2.resize(roi, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+    return cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+
+
+def _noise_roi(roi, amount=45):
+    """Rắc nhiễu ngẫu nhiên (Gaussian-ish) lên từng pixel, giống tín hiệu TV cũ."""
+    noise = np.random.randint(-amount, amount + 1, roi.shape, dtype=np.int16)
+    return np.clip(roi.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+
+def _swirl_roi(roi, strength=3.0):
+    """Xoáy ảnh quanh tâm vùng - góc xoay giảm dần theo bán kính (mạnh ở giữa)."""
+    h, w = roi.shape[:2]
+    if h < 2 or w < 2:
+        return roi
+    cx, cy = w / 2.0, h / 2.0
+    max_radius = max(min(cx, cy), 1e-5)
+
+    y_idx, x_idx = np.indices((h, w), dtype=np.float32)
+    dx = x_idx - cx
+    dy = y_idx - cy
+    radius = np.sqrt(dx ** 2 + dy ** 2)
+    theta = np.arctan2(dy, dx)
+
+    swirl_amount = strength * np.exp(-radius / max_radius)
+    new_theta = theta + swirl_amount
+
+    map_x = (cx + radius * np.cos(new_theta)).astype(np.float32)
+    map_y = (cy + radius * np.sin(new_theta)).astype(np.float32)
+
+    return cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+
+def _wave_roi(roi, amplitude=8.0, wavelength=25.0):
+    """Bẻ pixel theo hàm sin/cos - giống hiệu ứng nhìn qua mặt nước gợn sóng."""
+    h, w = roi.shape[:2]
+    y_idx, x_idx = np.indices((h, w), dtype=np.float32)
+    map_x = (x_idx + amplitude * np.sin(2 * np.pi * y_idx / wavelength)).astype(np.float32)
+    map_y = (y_idx + amplitude * np.cos(2 * np.pi * x_idx / wavelength)).astype(np.float32)
+    return cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+
+def _blur_roi(roi, ksize=27):
+    """Làm mờ mạnh (Gaussian blur) - giống hiệu ứng che mặt trên tin tức."""
+    k = ksize if ksize % 2 == 1 else ksize + 1  # kernel size phải là số lẻ
+    return cv2.GaussianBlur(roi, (k, k), 0)
+
+
+def _edge_roi(roi):
+    """Chỉ giữ lại đường viền (Canny edge detection) - giống bản phác thảo."""
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 60, 150)
+    return cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+
+
+def _heatmap_roi(roi):
+    """Tô màu giả nhiệt kiểu camera hồng ngoại (colormap JET)."""
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    return cv2.applyColorMap(gray, cv2.COLORMAP_JET)
+
+
+def _grayscale_roi(roi):
+    """Chuyển vùng ảnh sang đen trắng."""
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
+# Ma trận chuyển màu sepia (tông nâu cổ điển) - viết theo đúng thứ tự kênh BGR
+# mà OpenCV dùng (khác thứ tự công thức sepia gốc thường viết theo RGB).
+_SEPIA_MATRIX_BGR = np.array([
+    [0.131, 0.534, 0.272],
+    [0.168, 0.686, 0.349],
+    [0.189, 0.769, 0.393],
+])
+
+
+def _sepia_roi(roi):
+    """Chuyển vùng ảnh sang tông màu nâu cổ điển (hiệu ứng sepia)."""
+    sepia = cv2.transform(roi.astype(np.float32), _SEPIA_MATRIX_BGR)
+    return np.clip(sepia, 0, 255).astype(np.uint8)
+
+
+_ROI_EFFECT_FUNCTIONS = {
+    "pixelate": _pixelate_roi,
+    "noise": _noise_roi,
+    "swirl": _swirl_roi,
+    "wave": _wave_roi,
+    "blur": _blur_roi,
+    "edge": _edge_roi,
+    "heatmap": _heatmap_roi,
+    "grayscale": _grayscale_roi,
+    "sepia": _sepia_roi,
+}
 
 
 def apply_quad_color_effect(frame, quad_points, effect):
     """
-    Áp 1 hiệu ứng màu (1 phần tử của COLOR_EFFECT_CYCLE) lên vùng ảnh nằm bên
-    trong tứ giác `quad_points` - KHÔNG áp cho toàn bộ khung hình. Vẽ trực tiếp
-    lên `frame`.
+    Áp 1 hiệu ứng (1 phần tử của COLOR_EFFECT_CYCLE) lên vùng ảnh nằm bên
+    trong tứ giác `quad_points` - KHÔNG áp cho toàn bộ khung hình. Vẽ trực
+    tiếp lên `frame`.
     """
     if effect == "invert":
         invert_quad_region(frame, quad_points)
     elif effect in ("r0", "g0", "b0"):
         zero_color_channel_in_quad(frame, quad_points, effect[0])  # "r0"->"r", v.v.
+    elif effect in _ROI_EFFECT_FUNCTIONS:
+        _apply_roi_effect(frame, quad_points, _ROI_EFFECT_FUNCTIONS[effect])

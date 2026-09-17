@@ -13,10 +13,11 @@ Chạy face detection + emotion recognition + hand detection thời gian thực 
   đầu ngón trỏ tay phải (khép kín), và áp 1 hiệu ứng màu lên vùng ảnh BÊN TRONG
   tứ giác đó (không ảnh hưởng phần còn lại của khung hình) - giống hiệu ứng tạo
   1 "khung ảnh" bằng 2 tay.
-- Hiệu ứng màu áp lên vùng tứ giác đó đổi mỗi khi ngón cái và ngón trỏ của MỘT
-  tay (trái hoặc phải) chạm vào nhau (cử chỉ "chụm ngón" - pinch), xoay vòng
-  theo thứ tự: đảo màu -> bỏ kênh đỏ -> bỏ kênh xanh lá -> bỏ kênh xanh dương
-  -> quay lại đảo màu, ...
+- Hiệu ứng áp lên vùng tứ giác đó đổi mỗi khi ngón cái và ngón trỏ của MỘT tay
+  (trái hoặc phải) chạm vào nhau (cử chỉ "chụm ngón" - pinch), xoay vòng qua
+  13 hiệu ứng (xem COLOR_EFFECT_CYCLE trong utils.py): đảo màu -> bỏ đỏ -> bỏ
+  xanh lá -> bỏ xanh dương -> pixelate -> nhiễu hạt -> xoáy -> sóng nước ->
+  blur -> cạnh viền -> heatmap nhiệt -> grayscale -> sepia -> (quay lại đảo màu)
 
 Cách chạy:
     python main_webcam.py
