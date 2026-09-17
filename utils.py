@@ -2,8 +2,11 @@
 utils.py
 Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
 - detect_faces: tìm vị trí khuôn mặt trong 1 frame (dùng FaceDetectorYN - model YuNet)
-- recognize_face: so khớp 1 khuôn mặt đã crop với ảnh trong known_faces/ (dùng DeepFace)
-- log_recognition: ghi lại kết quả nhận diện vào file CSV
+- recognize_face: so khớp 1 khuôn mặt đã crop với ảnh trong known_faces/ (dùng DeepFace) - dùng cho main_static.py
+- log_recognition: ghi lại kết quả nhận diện danh tính vào file CSV
+- detect_emotion: phân tích cảm xúc (7 loại: angry, disgust, fear, happy, sad, surprise,
+  neutral) của 1 khuôn mặt đã crop (dùng DeepFace.analyze) - dùng cho main_webcam.py
+- log_emotion: ghi lại kết quả nhận diện cảm xúc vào file CSV riêng
 
 Lưu ý: từ OpenCV 5.0, CascadeClassifier (Haar Cascade) đã bị chuyển sang module
 contrib riêng, không còn có sẵn trong opencv-python mặc định. Vì vậy project này
@@ -24,6 +27,7 @@ MODEL_PATH = os.path.join(BASE_DIR, "models", "face_detection_yunet_2026may.onnx
 
 KNOWN_FACES_DIR = os.path.join(BASE_DIR, "known_faces")
 LOG_FILE = os.path.join(BASE_DIR, "recognition_log.csv")
+EMOTION_LOG_FILE = os.path.join(BASE_DIR, "emotion_log.csv")
 
 _face_detector = None  # khởi tạo 1 lần duy nhất, dùng lại cho các lần detect sau
 
@@ -108,3 +112,45 @@ def log_recognition(name):
         if not file_exists:
             writer.writerow(["timestamp", "name"])
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name])
+
+
+def detect_emotion(face_img):
+    """
+    Nhận vào 1 ảnh khuôn mặt đã crop (numpy array, BGR).
+    Phân tích cảm xúc bằng DeepFace.analyze() - trả về cảm xúc chiếm ưu thế nhất
+    trong 7 loại: angry, disgust, fear, happy, sad, surprise, neutral.
+
+    Trả về tuple (emotion, confidence):
+    - emotion: tên cảm xúc (str), hoặc "Unknown" nếu không phân tích được.
+    - confidence: độ tin cậy (%) của cảm xúc đó, dạng float (0-100).
+    """
+    if face_img.size == 0:
+        return "Unknown", 0.0
+
+    try:
+        results = DeepFace.analyze(
+            img_path=face_img,
+            actions=["emotion"],
+            enforce_detection=False,  # không bắt buộc phải detect lại (đã crop sẵn)
+            silent=True,
+        )
+        # DeepFace.analyze trả về list các dict (1 dict cho mỗi khuôn mặt tìm thấy)
+        if isinstance(results, list) and len(results) > 0:
+            result = results[0]
+            dominant_emotion = result["dominant_emotion"]
+            confidence = result["emotion"][dominant_emotion]
+            return dominant_emotion, confidence
+    except Exception as e:
+        print(f"[Lỗi khi phân tích cảm xúc]: {e}")
+
+    return "Unknown", 0.0
+
+
+def log_emotion(emotion):
+    """Ghi lại cảm xúc + thời gian nhận diện vào file CSV riêng (emotion_log.csv)."""
+    file_exists = os.path.isfile(EMOTION_LOG_FILE)
+    with open(EMOTION_LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["timestamp", "emotion"])
+        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), emotion])

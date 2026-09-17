@@ -3,16 +3,24 @@
 Project nhận diện khuôn mặt: phát hiện mặt bằng OpenCV, nhận diện "là ai" bằng DeepFace
 (dùng pretrained model, không cần tự train).
 
+**Cập nhật:** chế độ webcam (`main_webcam.py`) giờ đã chuyển từ nhận diện danh tính
+sang **nhận diện cảm xúc** (emotion recognition) bằng `DeepFace.analyze()` - hiện đầy đủ
+7 loại cảm xúc: Vui (happy), Buồn (sad), Giận (angry), Ngạc nhiên (surprise), Sợ hãi
+(fear), Ghê tởm (disgust), Bình thường (neutral). Khung quanh mặt đổi màu theo cảm xúc
+và hiện kèm % độ tin cậy. Chế độ ảnh/video tĩnh (`main_static.py`) vẫn giữ nguyên tính
+năng nhận diện danh tính như cũ.
+
 ## Cấu trúc project
 
 ```
 face_recognition_project/
 ├── requirements.txt      # danh sách thư viện cần cài
-├── utils.py              # các hàm dùng chung (detect, recognize, log)
-├── main_webcam.py        # chạy qua webcam thời gian thực
-├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn
-├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây
-└── recognition_log.csv   # sẽ tự động được tạo ra khi chạy, ghi lại ai được nhận diện lúc nào
+├── utils.py              # các hàm dùng chung (detect, recognize/emotion, log)
+├── main_webcam.py        # chạy qua webcam thời gian thực - NHẬN DIỆN CẢM XÚC
+├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn - nhận diện danh tính
+├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây - dùng cho main_static.py
+├── recognition_log.csv   # tự động tạo khi chạy main_static.py, ghi lại ai được nhận diện lúc nào
+└── emotion_log.csv       # tự động tạo khi chạy main_webcam.py, ghi lại cảm xúc + thời gian
 ```
 
 ## Bước 1: Cài Python và tạo virtual environment
@@ -62,35 +70,41 @@ Nếu script báo lỗi tải hoặc file quá nhỏ (do GitHub dùng Git LFS ch
 mở link được in ra bằng trình duyệt, tải file `.onnx` về thủ công, rồi bỏ vào
 thư mục `models/`.
 
-## Bước 4: Chạy với webcam (thời gian thực)
+## Bước 4: Chạy với webcam (thời gian thực) - nhận diện cảm xúc
 
 ```bash
 python main_webcam.py
 ```
 
-- Lần chạy đầu tiên, DeepFace sẽ tự tải model nhận diện về máy (cần internet, chỉ
-  tải 1 lần duy nhất).
-- Cửa sổ video hiện lên, khung xanh quanh mặt kèm tên (hoặc "Unknown" nếu không
-  khớp ai trong `known_faces/`).
+- Lần chạy đầu tiên, DeepFace sẽ tự tải model phân tích cảm xúc về máy (cần internet,
+  chỉ tải 1 lần duy nhất). Không cần ảnh mẫu trong `known_faces/` cho chế độ này.
+- Cửa sổ video hiện lên, khung quanh mặt đổi màu theo cảm xúc và hiện tên cảm xúc
+  kèm % độ tin cậy, ví dụ `Vui (87%)`. 7 loại cảm xúc: Vui (xanh lá), Buồn (xanh
+  dương), Giận (đỏ), Ngạc nhiên (vàng), Sợ hãi (tím), Ghê tởm (xanh rêu), Bình
+  thường (xám).
 - Nhấn phím `q` để thoát.
 
 Nếu webcam của bạn không phải camera số 0 (máy có nhiều camera), sửa dòng
 `cv2.VideoCapture(0)` trong `main_webcam.py` thành `1`, `2`,...
 
-## Bước 5: Chạy với ảnh hoặc video có sẵn
+## Bước 5: Chạy với ảnh hoặc video có sẵn - nhận diện danh tính
 
 ```bash
 python main_static.py duong_dan_toi_anh.jpg
 python main_static.py duong_dan_toi_video.mp4
 ```
 
+Chế độ này vẫn nhận diện "là ai" như cũ (so khớp với ảnh trong `known_faces/`).
 Kết quả sẽ được lưu ra file mới cùng thư mục, tên dạng `output_<tên file gốc>`.
 
 ## Bước 6: Xem log kết quả
 
-Sau khi chạy, file `recognition_log.csv` sẽ ghi lại: thời gian + tên người được
-nhận diện (chỉ ghi khi nhận diện được, không ghi "Unknown"). Mở bằng Excel hoặc
-VS Code để xem.
+- `emotion_log.csv` (tạo khi chạy `main_webcam.py`): ghi lại thời gian + cảm xúc
+  nhận diện được qua webcam.
+- `recognition_log.csv` (tạo khi chạy `main_static.py`): ghi lại thời gian + tên
+  người được nhận diện (chỉ ghi khi nhận diện được, không ghi "Unknown").
+
+Mở 2 file này bằng Excel hoặc VS Code để xem.
 
 ## Xử lý lỗi thường gặp
 
