@@ -11,6 +11,10 @@ Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
   MediaPipe Tasks API - HandLandmarker) - dùng cho main_webcam.py
 - draw_hand_landmarks: vẽ khung xương/khớp ngón tay lên frame
 - log_hand_gesture: ghi lại kết quả nhận diện cử chỉ tay vào file CSV riêng
+- get_two_hand_quad_points: khi có đủ 2 tay (trái + phải), tính 4 điểm góc tứ giác
+  nối đầu ngón trỏ/ngón cái của 2 tay
+- invert_quad_region: đảo màu vùng ảnh nằm trong 1 tứ giác
+- draw_quad_outline: vẽ đường viền khép kín nối các điểm của tứ giác
 
 Lưu ý: từ OpenCV 5.0, CascadeClassifier (Haar Cascade) đã bị chuyển sang module
 contrib riêng, không còn có sẵn trong opencv-python mặc định. Vì vậy project này
@@ -30,6 +34,7 @@ import time
 from datetime import datetime
 
 import cv2
+import numpy as np
 from deepface import DeepFace
 import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
@@ -304,3 +309,50 @@ def log_hand_gesture(gesture):
         if not file_exists:
             writer.writerow(["timestamp", "gesture"])
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), gesture])
+
+
+# ==================== Tứ giác 2 tay + đảo màu vùng bên trong ====================
+
+# Chỉ số landmark: 4 = đầu ngón cái (thumb tip), 8 = đầu ngón trỏ (index tip)
+_THUMB_TIP_ID = 4
+_INDEX_TIP_ID = 8
+
+
+def _landmark_to_pixel(landmark, width, height):
+    """Đổi 1 điểm landmark (toạ độ chuẩn hoá 0-1) sang toạ độ pixel (x, y)."""
+    return (int(landmark.x * width), int(landmark.y * height))
+
+
+def get_two_hand_quad_points(left_landmarks, right_landmarks, width, height):
+    """
+    Khi có đủ landmark của 2 tay (trái + phải), trả về 4 điểm (pixel) tạo thành
+    1 tứ giác, theo đúng thứ tự:
+        đầu ngón trỏ tay trái -> đầu ngón cái tay trái ->
+        đầu ngón cái tay phải -> đầu ngón trỏ tay phải
+    (rồi khép kín lại về điểm đầu tiên).
+    """
+    left_index_tip = _landmark_to_pixel(left_landmarks[_INDEX_TIP_ID], width, height)
+    left_thumb_tip = _landmark_to_pixel(left_landmarks[_THUMB_TIP_ID], width, height)
+    right_thumb_tip = _landmark_to_pixel(right_landmarks[_THUMB_TIP_ID], width, height)
+    right_index_tip = _landmark_to_pixel(right_landmarks[_INDEX_TIP_ID], width, height)
+
+    return [left_index_tip, left_thumb_tip, right_thumb_tip, right_index_tip]
+
+
+def invert_quad_region(frame, quad_points):
+    """
+    Đảo màu (invert - giống hiệu ứng "âm bản") toàn bộ vùng ảnh nằm bên trong
+    tứ giác `quad_points` (danh sách 4 điểm pixel (x, y)). Vẽ trực tiếp lên `frame`.
+    """
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    pts = np.array([quad_points], dtype=np.int32)
+    cv2.fillPoly(mask, pts, 255)
+
+    mask_bool = mask.astype(bool)
+    frame[mask_bool] = 255 - frame[mask_bool]
+
+
+def draw_quad_outline(frame, quad_points, color=(255, 255, 255), thickness=2):
+    """Vẽ đường viền khép kín nối lần lượt các điểm trong `quad_points`."""
+    pts = np.array([quad_points], dtype=np.int32)
+    cv2.polylines(frame, pts, isClosed=True, color=color, thickness=thickness)

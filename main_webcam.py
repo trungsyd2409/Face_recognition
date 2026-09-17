@@ -8,6 +8,10 @@ Chạy face detection + emotion recognition + hand detection thời gian thực 
 - Bàn tay: dùng MediaPipe Hands để phát hiện bàn tay, vẽ khung xương/khớp ngón
   tay, và nhận diện vài cử chỉ cơ bản: nắm tay, xòe tay, thumbs up, hoặc đếm
   số ngón đang giơ.
+- Khi cả 2 tay (trái + phải) cùng xuất hiện trong khung hình: vẽ 1 tứ giác nối
+  đầu ngón trỏ tay trái -> đầu ngón cái tay trái -> đầu ngón cái tay phải ->
+  đầu ngón trỏ tay phải (khép kín), và đảo màu (invert) toàn bộ vùng ảnh bên
+  trong tứ giác đó - giống hiệu ứng tạo 1 "khung ảnh" bằng 2 tay.
 
 Cách chạy:
     python main_webcam.py
@@ -19,6 +23,7 @@ import cv2
 from utils import (
     detect_faces, detect_emotion, log_emotion,
     detect_hands, draw_hand_landmarks, log_hand_gesture,
+    get_two_hand_quad_points, invert_quad_region, draw_quad_outline,
 )
 
 # Không phân tích cảm xúc (DeepFace) ở mọi frame vì sẽ rất chậm/lag.
@@ -103,6 +108,19 @@ def main():
         # ---- Nhận diện bàn tay + cử chỉ ----
         hands_info = detect_hands(frame)
         frame_h, frame_w = frame.shape[:2]
+
+        left_hand = next((h for h in hands_info if h["handedness"] == "Left"), None)
+        right_hand = next((h for h in hands_info if h["handedness"] == "Right"), None)
+
+        # Khi có đủ 2 tay: đảo màu vùng tứ giác tạo bởi 4 đầu ngón tay TRƯỚC,
+        # rồi mới vẽ khung xương/nhãn của từng tay đè lên trên, để chúng luôn
+        # hiện rõ dù nằm trong hay ngoài vùng bị đảo màu.
+        if left_hand and right_hand:
+            quad_points = get_two_hand_quad_points(
+                left_hand["landmarks"], right_hand["landmarks"], frame_w, frame_h,
+            )
+            invert_quad_region(frame, quad_points)
+            draw_quad_outline(frame, quad_points)
 
         for hand in hands_info:
             draw_hand_landmarks(frame, hand["landmarks"])
