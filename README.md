@@ -10,6 +10,10 @@ sang **nhận diện cảm xúc** (emotion recognition) bằng `DeepFace.analyze
 và hiện kèm % độ tin cậy. Chế độ ảnh/video tĩnh (`main_static.py`) vẫn giữ nguyên tính
 năng nhận diện danh tính như cũ.
 
+**Cập nhật thêm:** chế độ webcam giờ nhận diện thêm **bàn tay** bằng MediaPipe
+(`HandLandmarker`) - vẽ khung xương/khớp ngón tay lên hình và nhận diện vài cử chỉ cơ
+bản: nắm tay, xòe tay, thumbs up, hoặc đếm số ngón đang giơ.
+
 ## Cấu trúc project
 
 ```
@@ -19,8 +23,10 @@ face_recognition_project/
 ├── main_webcam.py        # chạy qua webcam thời gian thực - NHẬN DIỆN CẢM XÚC
 ├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn - nhận diện danh tính
 ├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây - dùng cho main_static.py
+├── models/               # chứa 2 file model: YuNet (mặt) + hand_landmarker.task (tay)
 ├── recognition_log.csv   # tự động tạo khi chạy main_static.py, ghi lại ai được nhận diện lúc nào
-└── emotion_log.csv       # tự động tạo khi chạy main_webcam.py, ghi lại cảm xúc + thời gian
+├── emotion_log.csv       # tự động tạo khi chạy main_webcam.py, ghi lại cảm xúc + thời gian
+└── hand_log.csv          # tự động tạo khi chạy main_webcam.py, ghi lại cử chỉ tay + thời gian
 ```
 
 ## Bước 1: Cài Python và tạo virtual environment
@@ -51,24 +57,31 @@ có thể mất vài phút. Đảm bảo máy còn đủ dung lượng và kết
 Vào thư mục `known_faces/`, đọc file `HUONG_DAN.txt` rồi bỏ ảnh của bạn (và bạn bè
 nếu muốn) vào đó. Đặt tên file = tên người, ví dụ `An.jpg`.
 
-## Bước 3.5: Tải model nhận diện khuôn mặt (chỉ cần chạy 1 lần)
+## Bước 3.5: Tải các model cần thiết (chỉ cần chạy 1 lần)
 
 ```bash
 python download_model.py
 ```
 
-Script này tải file model YuNet (~230KB) về thư mục `models/`. Cần chạy đúng 1 lần
-duy nhất trước khi chạy `main_webcam.py` hoặc `main_static.py` lần đầu tiên.
+Script này tải **2 file model** về thư mục `models/`:
+1. `face_detection_yunet_2026may.onnx` (~230KB) - phát hiện khuôn mặt.
+2. `hand_landmarker.task` (vài MB) - phát hiện bàn tay + cử chỉ (MediaPipe).
+
+Cần chạy đúng 1 lần duy nhất trước khi chạy `main_webcam.py` hoặc `main_static.py`
+lần đầu tiên.
 
 > **Vì sao cần bước này?** Từ OpenCV 5.0 trở đi, `CascadeClassifier` (cách phát
 > hiện khuôn mặt kiểu cũ - Haar Cascade) đã bị chuyển sang module `contrib` riêng,
 > không còn có sẵn trong `opencv-python` mặc định nữa. Project này dùng
 > `FaceDetectorYN` (model YuNet) thay thế — đây cũng là cách OpenCV chính thức
-> khuyến nghị, cho kết quả detect nhanh và chính xác hơn Haar Cascade cũ.
+> khuyến nghị, cho kết quả detect nhanh và chính xác hơn Haar Cascade cũ. Tương
+> tự, MediaPipe bản mới cũng yêu cầu tải riêng 1 file model `.task` cho việc nhận
+> diện bàn tay (API cũ `mediapipe.solutions.hands` không cần tải file này nhưng
+> đã bị loại bỏ khỏi các bản MediaPipe mới).
 
-Nếu script báo lỗi tải hoặc file quá nhỏ (do GitHub dùng Git LFS cho file này),
-mở link được in ra bằng trình duyệt, tải file `.onnx` về thủ công, rồi bỏ vào
-thư mục `models/`.
+Nếu script báo lỗi tải hoặc file quá nhỏ (do GitHub dùng Git LFS, hoặc mạng chặn),
+mở link được in ra bằng trình duyệt, tải file về thủ công, rồi bỏ vào thư mục
+`models/` (giữ đúng tên file như trong thông báo).
 
 ## Bước 4: Chạy với webcam (thời gian thực) - nhận diện cảm xúc
 
@@ -82,6 +95,8 @@ python main_webcam.py
   kèm % độ tin cậy, ví dụ `Vui (87%)`. 7 loại cảm xúc: Vui (xanh lá), Buồn (xanh
   dương), Giận (đỏ), Ngạc nhiên (vàng), Sợ hãi (tím), Ghê tởm (xanh rêu), Bình
   thường (xám).
+- Nếu có bàn tay trong khung hình, sẽ hiện thêm khung xương/khớp ngón tay + tên
+  cử chỉ (vd. `Right: Xoe tay`, `Left: Thumbs up`, `Right: 2 ngon tay`).
 - Nhấn phím `q` để thoát.
 
 Nếu webcam của bạn không phải camera số 0 (máy có nhiều camera), sửa dòng
@@ -101,10 +116,12 @@ Kết quả sẽ được lưu ra file mới cùng thư mục, tên dạng `outp
 
 - `emotion_log.csv` (tạo khi chạy `main_webcam.py`): ghi lại thời gian + cảm xúc
   nhận diện được qua webcam.
+- `hand_log.csv` (tạo khi chạy `main_webcam.py`): ghi lại thời gian + cử chỉ tay
+  nhận diện được qua webcam.
 - `recognition_log.csv` (tạo khi chạy `main_static.py`): ghi lại thời gian + tên
   người được nhận diện (chỉ ghi khi nhận diện được, không ghi "Unknown").
 
-Mở 2 file này bằng Excel hoặc VS Code để xem.
+Mở các file này bằng Excel hoặc VS Code để xem.
 
 ## Xử lý lỗi thường gặp
 
@@ -121,6 +138,12 @@ Mở 2 file này bằng Excel hoặc VS Code để xem.
   ít thường xuyên hơn).
 - **Toàn ra "Unknown"**: kiểm tra ảnh trong `known_faces/` có rõ mặt không, có đúng
   định dạng .jpg/.png không.
+- **`FileNotFoundError: Chưa có file model nhận diện bàn tay`**: chưa chạy (hoặc
+  chạy chưa xong) `python download_model.py` — kiểm tra thư mục `models/` đã có
+  file `hand_landmarker.task` chưa.
+- **Cài `mediapipe` bị lỗi / báo không tương thích**: MediaPipe hiện chỉ hỗ trợ
+  tốt trên Python 3.9–3.12 (64-bit); nếu đang dùng Python quá mới hoặc bản 32-bit,
+  hãy đổi sang Python 3.10/3.11 64-bit.
 
 ## Hướng phát triển thêm (nếu muốn làm portfolio)
 

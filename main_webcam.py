@@ -1,10 +1,13 @@
 """
 main_webcam.py
-Chạy face detection + emotion recognition thời gian thực qua webcam.
+Chạy face detection + emotion recognition + hand detection thời gian thực qua webcam.
 
-Dùng DeepFace.analyze() để phân tích cảm xúc khuôn mặt: angry, disgust, fear,
-happy, sad, surprise, neutral. Khung quanh mặt sẽ đổi màu và hiện tên cảm xúc
-(kèm % độ tin cậy) tương ứng với cảm xúc chiếm ưu thế.
+- Khuôn mặt: dùng DeepFace.analyze() để phân tích cảm xúc (angry, disgust, fear,
+  happy, sad, surprise, neutral). Khung quanh mặt đổi màu và hiện tên cảm xúc
+  (kèm % độ tin cậy) tương ứng với cảm xúc chiếm ưu thế.
+- Bàn tay: dùng MediaPipe Hands để phát hiện bàn tay, vẽ khung xương/khớp ngón
+  tay, và nhận diện vài cử chỉ cơ bản: nắm tay, xòe tay, thumbs up, hoặc đếm
+  số ngón đang giơ.
 
 Cách chạy:
     python main_webcam.py
@@ -13,10 +16,14 @@ Nhấn 'q' để thoát.
 """
 
 import cv2
-from utils import detect_faces, detect_emotion, log_emotion
+from utils import (
+    detect_faces, detect_emotion, log_emotion,
+    detect_hands, draw_hand_landmarks, log_hand_gesture,
+)
 
 # Không phân tích cảm xúc (DeepFace) ở mọi frame vì sẽ rất chậm/lag.
 # Chỉ chạy phân tích mỗi N frame, các frame còn lại dùng lại kết quả gần nhất.
+# (Nhận diện tay bằng MediaPipe nhẹ hơn nhiều nên vẫn chạy mỗi frame để mượt.)
 RECOGNIZE_EVERY_N_FRAMES = 15
 
 # Màu khung (BGR) theo từng loại cảm xúc
@@ -43,6 +50,8 @@ EMOTION_LABELS_VI = {
     "Unknown": "Khong xac dinh",
 }
 
+HAND_TEXT_COLOR = (255, 255, 255)  # trắng
+
 
 def main():
     cap = cv2.VideoCapture(0)
@@ -51,9 +60,9 @@ def main():
         return
 
     frame_count = 0
-    last_results = {}  # cache (emotion, confidence), key = vị trí xấp xỉ của khuôn mặt
+    last_results = {}  # cache (emotion, confidence) cho mặt, key = vị trí xấp xỉ
 
-    print("Đang chạy webcam - nhận diện cảm xúc... Nhấn 'q' trong cửa sổ video để thoát.")
+    print("Đang chạy webcam - nhận diện cảm xúc + bàn tay... Nhấn 'q' trong cửa sổ video để thoát.")
 
     while True:
         ret, frame = cap.read()
@@ -61,8 +70,10 @@ def main():
             print("Không đọc được frame từ webcam.")
             break
 
-        faces = detect_faces(frame)
         frame_count += 1
+
+        # ---- Nhận diện khuôn mặt + cảm xúc ----
+        faces = detect_faces(frame)
 
         for (x, y, w, h) in faces:
             pos_key = (x // 50, y // 50)  # gộp các vị trí gần nhau lại để cache ổn định hơn
@@ -89,7 +100,29 @@ def main():
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2,
             )
 
-        cv2.imshow("Nhan dien cam xuc - nhan 'q' de thoat", frame)
+        # ---- Nhận diện bàn tay + cử chỉ ----
+        hands_info = detect_hands(frame)
+        frame_h, frame_w = frame.shape[:2]
+
+        for hand in hands_info:
+            draw_hand_landmarks(frame, hand["landmarks"])
+
+            # Ghi log cử chỉ tay theo cùng nhịp với nhận diện cảm xúc, tránh ghi
+            # log ở mọi frame (sẽ tạo quá nhiều dòng trùng lặp).
+            if frame_count % RECOGNIZE_EVERY_N_FRAMES == 0:
+                log_hand_gesture(hand["gesture"])
+
+            # Hiện tên tay (Left/Right) + cử chỉ ngay phía trên cổ tay
+            wrist = hand["landmarks"][0]
+            text_x = int(wrist.x * frame_w)
+            text_y = max(int(wrist.y * frame_h) - 20, 20)
+            hand_text = f'{hand["handedness"]}: {hand["gesture"]}'
+            cv2.putText(
+                frame, hand_text, (text_x, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, HAND_TEXT_COLOR, 2,
+            )
+
+        cv2.imshow("Nhan dien cam xuc & ban tay - nhan 'q' de thoat", frame)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
