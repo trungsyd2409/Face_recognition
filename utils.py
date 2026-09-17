@@ -16,6 +16,10 @@ Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
 - invert_quad_region: đảo màu (âm bản) vùng ảnh nằm trong 1 tứ giác
 - zero_color_channel_in_quad: đặt 1 kênh màu (r/g/b) về 0 cho vùng ảnh trong 1 tứ giác
 - draw_quad_outline: vẽ đường viền khép kín nối các điểm của tứ giác
+- is_pinching: kiểm tra 1 bàn tay có đang "chụm" ngón cái + ngón trỏ lại (chạm nhau)
+  hay không
+- apply_quad_color_effect: áp 1 hiệu ứng màu (đảo màu, hoặc bỏ 1 kênh r/g/b) lên
+  vùng ảnh nằm trong 1 tứ giác
 
 Lưu ý: từ OpenCV 5.0, CascadeClassifier (Haar Cascade) đã bị chuyển sang module
 contrib riêng, không còn có sẵn trong opencv-python mặc định. Vì vậy project này
@@ -388,3 +392,47 @@ def draw_quad_outline(frame, quad_points, color=(255, 255, 255), thickness=2):
     """Vẽ đường viền khép kín nối lần lượt các điểm trong `quad_points`."""
     pts = np.array([quad_points], dtype=np.int32)
     cv2.polylines(frame, pts, isClosed=True, color=color, thickness=thickness)
+
+
+# ==================== Cử chỉ "chụm ngón" (pinch) 1 tay + hiệu ứng theo vùng tứ giác ====================
+
+def _landmark_distance(landmark_a, landmark_b):
+    """Khoảng cách Euclid giữa 2 điểm landmark (toạ độ chuẩn hoá 0-1)."""
+    return ((landmark_a.x - landmark_b.x) ** 2 + (landmark_a.y - landmark_b.y) ** 2) ** 0.5
+
+
+def is_pinching(landmarks, ratio_threshold=0.4):
+    """
+    Kiểm tra ngón cái và ngón trỏ của 1 bàn tay có đang chạm nhau không (cử chỉ
+    "chụm ngón" - pinch). So sánh khoảng cách giữa 2 đầu ngón với 1 khoảng cách
+    tham chiếu trên chính bàn tay đó (cổ tay - gốc ngón giữa), để không bị ảnh
+    hưởng bởi việc tay ở gần hay xa camera.
+    """
+    thumb_tip = landmarks[THUMB_TIP_ID]
+    index_tip = landmarks[INDEX_TIP_ID]
+    wrist = landmarks[0]
+    middle_mcp = landmarks[9]  # gốc ngón giữa, dùng làm mốc đo "kích thước" bàn tay
+
+    hand_size = _landmark_distance(wrist, middle_mcp)
+    if hand_size == 0:
+        return False
+
+    pinch_distance = _landmark_distance(thumb_tip, index_tip)
+    return (pinch_distance / hand_size) < ratio_threshold
+
+
+# Chuỗi hiệu ứng lặp vòng khi chụm ngón: đảo màu -> bỏ đỏ -> bỏ xanh lá -> bỏ
+# xanh dương -> quay lại đảo màu, ...
+COLOR_EFFECT_CYCLE = ["invert", "r0", "g0", "b0"]
+
+
+def apply_quad_color_effect(frame, quad_points, effect):
+    """
+    Áp 1 hiệu ứng màu (1 phần tử của COLOR_EFFECT_CYCLE) lên vùng ảnh nằm bên
+    trong tứ giác `quad_points` - KHÔNG áp cho toàn bộ khung hình. Vẽ trực tiếp
+    lên `frame`.
+    """
+    if effect == "invert":
+        invert_quad_region(frame, quad_points)
+    elif effect in ("r0", "g0", "b0"):
+        zero_color_channel_in_quad(frame, quad_points, effect[0])  # "r0"->"r", v.v.

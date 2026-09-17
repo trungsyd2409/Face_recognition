@@ -8,14 +8,15 @@ Chạy face detection + emotion recognition + hand detection thời gian thực 
 - Bàn tay: dùng MediaPipe Hands để phát hiện bàn tay, vẽ khung xương/khớp ngón
   tay, và nhận diện vài cử chỉ cơ bản: nắm tay, xòe tay, thumbs up, hoặc đếm
   số ngón đang giơ.
-- Khi cả 2 tay (trái + phải) cùng xuất hiện trong khung hình: với mỗi cặp ngón
-  tay liền kề, vẽ 1 tứ giác nối đầu ngón A tay trái -> đầu ngón B tay trái ->
-  đầu ngón B tay phải -> đầu ngón A tay phải (khép kín), rồi áp 1 hiệu ứng màu
-  lên vùng ảnh bên trong tứ giác đó - giống hiệu ứng tạo 1 "khung ảnh" bằng 2 tay:
-    - Ngón cái - ngón trỏ:     đảo màu (invert / âm bản)
-    - Ngón trỏ - ngón giữa:    bỏ kênh đỏ   (R = 0)
-    - Ngón giữa - ngón áp út:  bỏ kênh xanh lá (G = 0)
-    - Ngón áp út - ngón út:    bỏ kênh xanh dương (B = 0)
+- Khi cả 2 tay (trái + phải) cùng xuất hiện trong khung hình: vẽ 1 tứ giác nối
+  đầu ngón trỏ tay trái -> đầu ngón cái tay trái -> đầu ngón cái tay phải ->
+  đầu ngón trỏ tay phải (khép kín), và áp 1 hiệu ứng màu lên vùng ảnh BÊN TRONG
+  tứ giác đó (không ảnh hưởng phần còn lại của khung hình) - giống hiệu ứng tạo
+  1 "khung ảnh" bằng 2 tay.
+- Hiệu ứng màu áp lên vùng tứ giác đó đổi mỗi khi ngón cái và ngón trỏ của MỘT
+  tay (trái hoặc phải) chạm vào nhau (cử chỉ "chụm ngón" - pinch), xoay vòng
+  theo thứ tự: đảo màu -> bỏ kênh đỏ -> bỏ kênh xanh lá -> bỏ kênh xanh dương
+  -> quay lại đảo màu, ...
 
 Cách chạy:
     python main_webcam.py
@@ -27,9 +28,8 @@ import cv2
 from utils import (
     detect_faces, detect_emotion, log_emotion,
     detect_hands, draw_hand_landmarks, log_hand_gesture,
-    get_two_hand_quad_points, invert_quad_region, draw_quad_outline,
-    zero_color_channel_in_quad,
-    THUMB_TIP_ID, INDEX_TIP_ID, MIDDLE_TIP_ID, RING_TIP_ID, PINKY_TIP_ID,
+    get_two_hand_quad_points, draw_quad_outline,
+    is_pinching, apply_quad_color_effect, COLOR_EFFECT_CYCLE,
 )
 
 # Không phân tích cảm xúc (DeepFace) ở mọi frame vì sẽ rất chậm/lag.
@@ -72,6 +72,12 @@ def main():
 
     frame_count = 0
     last_results = {}  # cache (emotion, confidence) cho mặt, key = vị trí xấp xỉ
+
+    # Trạng thái hiệu ứng màu áp lên vùng tứ giác 2 tay, đổi mỗi khi phát hiện
+    # cử chỉ "chụm ngón" (pinch) MỚI ở 1 trong 2 tay. Bắt đầu ở "invert" (âm
+    # bản) - đúng bước đầu tiên trong vòng lặp hiệu ứng.
+    current_effect_index = 0
+    was_pinching = {"Left": False, "Right": False}
 
     print("Đang chạy webcam - nhận diện cảm xúc + bàn tay... Nhấn 'q' trong cửa sổ video để thoát.")
 
@@ -118,40 +124,36 @@ def main():
         left_hand = next((h for h in hands_info if h["handedness"] == "Left"), None)
         right_hand = next((h for h in hands_info if h["handedness"] == "Right"), None)
 
-        # Khi có đủ 2 tay: áp hiệu ứng màu lên 4 vùng tứ giác (mỗi vùng ứng với
-        # 1 cặp ngón liền kề) TRƯỚC, rồi mới vẽ khung xương/nhãn của từng tay đè
-        # lên trên, để chúng luôn hiện rõ dù nằm trong hay ngoài các vùng đó.
+        # ---- Cử chỉ "chụm ngón" (pinch) của từng tay -> xoay vòng hiệu ứng ----
+        # Cập nhật TRƯỚC khi vẽ tứ giác, để nếu vừa chụm ở đúng frame này thì
+        # tứ giác hiển thị luôn đúng hiệu ứng mới ngay lập tức.
+        # Chỉ đổi hiệu ứng ở đúng thời điểm 2 ngón VỪA chạm nhau (cạnh lên),
+        # không đổi liên tục trong lúc vẫn đang giữ chụm.
+        for hand in hands_info:
+            handedness = hand["handedness"]
+            pinching_now = is_pinching(hand["landmarks"])
+            if pinching_now and not was_pinching.get(handedness, False):
+                current_effect_index = (current_effect_index + 1) % len(COLOR_EFFECT_CYCLE)
+            was_pinching[handedness] = pinching_now
+
+        # Khi có đủ 2 tay: áp hiệu ứng màu hiện tại lên vùng tứ giác tạo bởi 4
+        # đầu ngón tay TRƯỚC, rồi mới vẽ khung xương/nhãn của từng tay đè lên
+        # trên, để chúng luôn hiện rõ dù nằm trong hay ngoài vùng đó.
         if left_hand and right_hand:
-            left_lm = left_hand["landmarks"]
-            right_lm = right_hand["landmarks"]
-
-            # Ngón cái - ngón trỏ: đảo màu (invert / âm bản)
-            quad_thumb_index = get_two_hand_quad_points(
-                left_lm, right_lm, frame_w, frame_h, INDEX_TIP_ID, THUMB_TIP_ID,
+            quad_points = get_two_hand_quad_points(
+                left_hand["landmarks"], right_hand["landmarks"], frame_w, frame_h,
             )
-            invert_quad_region(frame, quad_thumb_index)
-            draw_quad_outline(frame, quad_thumb_index)
+            current_effect = COLOR_EFFECT_CYCLE[current_effect_index]
+            apply_quad_color_effect(frame, quad_points, current_effect)
+            draw_quad_outline(frame, quad_points)
 
-            # Ngón trỏ - ngón giữa: bỏ kênh đỏ (R = 0)
-            quad_index_middle = get_two_hand_quad_points(
-                left_lm, right_lm, frame_w, frame_h, INDEX_TIP_ID, MIDDLE_TIP_ID,
+            # Hiện tên hiệu ứng hiện tại ngay phía trên tứ giác
+            quad_top_point = min(quad_points, key=lambda p: p[1])
+            cv2.putText(
+                frame, f"Hieu ung: {current_effect}",
+                (quad_top_point[0], max(quad_top_point[1] - 15, 20)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2,
             )
-            zero_color_channel_in_quad(frame, quad_index_middle, "r")
-            draw_quad_outline(frame, quad_index_middle)
-
-            # Ngón giữa - ngón áp út: bỏ kênh xanh lá (G = 0)
-            quad_middle_ring = get_two_hand_quad_points(
-                left_lm, right_lm, frame_w, frame_h, MIDDLE_TIP_ID, RING_TIP_ID,
-            )
-            zero_color_channel_in_quad(frame, quad_middle_ring, "g")
-            draw_quad_outline(frame, quad_middle_ring)
-
-            # Ngón áp út - ngón út: bỏ kênh xanh dương (B = 0)
-            quad_ring_pinky = get_two_hand_quad_points(
-                left_lm, right_lm, frame_w, frame_h, RING_TIP_ID, PINKY_TIP_ID,
-            )
-            zero_color_channel_in_quad(frame, quad_ring_pinky, "b")
-            draw_quad_outline(frame, quad_ring_pinky)
 
         for hand in hands_info:
             draw_hand_landmarks(frame, hand["landmarks"])
