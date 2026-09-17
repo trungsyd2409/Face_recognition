@@ -17,6 +17,10 @@ Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
 - draw_quad_vertices: vẽ các chấm tròn đánh dấu 4 điểm góc (đỉnh) của tứ giác
 - is_pinching: kiểm tra 1 bàn tay có đang "chụm" ngón cái + ngón trỏ lại (chạm nhau)
   hay không
+- get_fingers_up: trả về trạng thái giơ/gập của 5 ngón của 1 bàn tay
+- FINGER_PAIR_QUADS / is_finger_pair_visible / apply_multi_quad_effects: 4 tứ giác
+  giữa 2 tay (cái-trỏ, trỏ-giữa, giữa-áp út, áp út-út), ẩn tứ giác nếu không có
+  ngón nào của nó đang giơ, mỗi tứ giác 1 hiệu ứng + màu viền khác nhau
 - apply_quad_color_effect: áp 1 trong 13 hiệu ứng (COLOR_EFFECT_CYCLE) lên vùng
   ảnh nằm trong 1 tứ giác: đảo màu, bỏ kênh r/g/b, pixelate, nhiễu hạt, xoáy,
   sóng nước, blur, cạnh viền, heatmap nhiệt, grayscale, sepia
@@ -207,6 +211,8 @@ def detect_hands(frame):
                 "landmarks": hand_landmarks,
                 "handedness": handedness,
                 "gesture": gesture,
+                # [thumb, index, middle, ring, pinky] - 1 = đang giơ, 0 = gập
+                "fingers_up": get_fingers_up(hand_landmarks, handedness),
             })
 
     return hands_info
@@ -224,11 +230,10 @@ def draw_hand_landmarks(frame, hand_landmarks):
         cv2.circle(frame, point, 4, (0, 200, 0), -1)
 
 
-def _classify_gesture(landmarks, handedness):
+def get_fingers_up(landmarks, handedness):
     """
-    Nhận vào list 21 điểm landmark (toạ độ chuẩn hoá 0-1, có .x/.y) của 1 bàn tay
-    + handedness ("Left"/"Right"). Trả về tên cử chỉ cơ bản: "Nam tay" (fist),
-    "Xoe tay" (open palm), "Thumbs up", hoặc "N ngon tay" (đang giơ N ngón).
+    Trả về list 5 phần tử [thumb, index, middle, ring, pinky], mỗi phần tử là
+    1 (ngón đang giơ) hoặc 0 (ngón đang gập).
 
     Cách làm: với mỗi ngón, so sánh vị trí đầu ngón (tip) với 1 khớp gần đó -
     nếu tip "vươn ra xa hơn" thì coi là ngón đang giơ (extended).
@@ -250,6 +255,19 @@ def _classify_gesture(landmarks, handedness):
         tip = landmarks[tip_id]
         pip = landmarks[tip_id - 2]
         fingers_up.append(1 if tip.y < pip.y else 0)
+
+    return fingers_up
+
+
+def _classify_gesture(landmarks, handedness):
+    """
+    Nhận vào list 21 điểm landmark (toạ độ chuẩn hoá 0-1, có .x/.y) của 1 bàn tay
+    + handedness ("Left"/"Right"). Trả về tên cử chỉ cơ bản: "Nam tay" (fist),
+    "Xoe tay" (open palm), "Thumbs up", hoặc "N ngon tay" (đang giơ N ngón).
+
+    Việc xác định ngón nào đang giơ do get_fingers_up() đảm nhận.
+    """
+    fingers_up = get_fingers_up(landmarks, handedness)
 
     total_up = sum(fingers_up)
 
@@ -545,3 +563,54 @@ def apply_quad_color_effect(frame, quad_points, effect):
         zero_color_channel_in_quad(frame, quad_points, effect[0])  # "r0"->"r", v.v.
     elif effect in _ROI_EFFECT_FUNCTIONS:
         _apply_roi_effect(frame, quad_points, _ROI_EFFECT_FUNCTIONS[effect])
+
+
+# ==================== Nhiều tứ giác 2 tay (4 cặp ngón liền kề) ====================
+
+# Chỉ số ngón theo thứ tự trong list fingers_up: 0 cái, 1 trỏ, 2 giữa, 3 áp út, 4 út
+_TIP_ID_TO_FINGER_INDEX = {
+    THUMB_TIP_ID: 0, INDEX_TIP_ID: 1, MIDDLE_TIP_ID: 2, RING_TIP_ID: 3, PINKY_TIP_ID: 4,
+}
+
+# 4 tứ giác giữa 2 tay, mỗi tứ giác nối 1 cặp ngón liền kề. Mỗi phần tử gồm:
+#   (tên, tip_id_a, tip_id_b, màu viền BGR)
+# Màu viền xen kẽ khác nhau để dễ phân biệt từng dải.
+FINGER_PAIR_QUADS = [
+    ("cai-tro",      INDEX_TIP_ID,  THUMB_TIP_ID,  (0, 200, 255)),   # cam
+    ("tro-giua",     MIDDLE_TIP_ID, INDEX_TIP_ID,  (255, 0, 255)),   # hồng tím
+    ("giua-ap_ut",   RING_TIP_ID,   MIDDLE_TIP_ID, (0, 255, 0)),     # xanh lá
+    ("ap_ut-ut",     PINKY_TIP_ID,  RING_TIP_ID,   (255, 255, 0)),   # xanh ngọc
+]
+
+
+def is_finger_pair_visible(left_fingers_up, right_fingers_up, tip_id_a, tip_id_b,
+                           require_all=False):
+    """
+    Kiểm tra tứ giác của cặp ngón (tip_id_a, tip_id_b) có nên hiển thị không.
+
+    - require_all=False (mặc định): chỉ ẨN khi KHÔNG có ngón nào trong 4 ngón
+      tạo tứ giác (2 ngón x 2 tay) đang giơ ra.
+    - require_all=True: chỉ HIỆN khi cả 4 ngón đều đang giơ (chặt hơn).
+    """
+    idx_a = _TIP_ID_TO_FINGER_INDEX[tip_id_a]
+    idx_b = _TIP_ID_TO_FINGER_INDEX[tip_id_b]
+    states = [left_fingers_up[idx_a], left_fingers_up[idx_b],
+              right_fingers_up[idx_a], right_fingers_up[idx_b]]
+    return all(states) if require_all else any(states)
+
+
+def apply_multi_quad_effects(frame, quads_with_effects):
+    """
+    Áp nhiều hiệu ứng lên nhiều tứ giác cùng lúc. `quads_with_effects` là list
+    các cặp (quad_points, effect). Mọi hiệu ứng đều được tính từ khung hình GỐC
+    (chưa bị hiệu ứng nào tác động), để các tứ giác chồng lên nhau không bị
+    "cộng dồn" hiệu ứng. Vẽ trực tiếp lên `frame`.
+    """
+    if not quads_with_effects:
+        return
+    original = frame.copy()
+    for quad_points, effect in quads_with_effects:
+        effect_frame = original.copy()
+        apply_quad_color_effect(effect_frame, quad_points, effect)
+        mask_bool = _quad_mask(frame, quad_points)
+        frame[mask_bool] = effect_frame[mask_bool]

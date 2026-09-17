@@ -5,12 +5,15 @@ Chạy hand detection + nhận diện cử chỉ thời gian thực qua webcam.
 - Bàn tay: dùng MediaPipe Hands để phát hiện bàn tay và nhận diện vài cử chỉ
   cơ bản: nắm tay, xòe tay, thumbs up, hoặc đếm số ngón đang giơ (KHÔNG vẽ
   khung xương/khớp đầy đủ của bàn tay).
-- Khi cả 2 tay (trái + phải) cùng xuất hiện trong khung hình: vẽ 1 tứ giác nối
-  đầu ngón trỏ tay trái -> đầu ngón cái tay trái -> đầu ngón cái tay phải ->
-  đầu ngón trỏ tay phải (khép kín) cùng 4 điểm đánh dấu ở các đỉnh, và áp 1
-  hiệu ứng màu lên vùng ảnh BÊN TRONG tứ giác đó (không ảnh hưởng phần còn lại
-  của khung hình) - giống hiệu ứng tạo 1 "khung ảnh" bằng 2 tay.
-- Hiệu ứng áp lên vùng tứ giác đó đổi mỗi khi ngón cái và ngón trỏ của MỘT tay
+- Khi cả 2 tay (trái + phải) cùng xuất hiện trong khung hình: vẽ tối đa 4 tứ
+  giác, mỗi tứ giác nối 1 cặp ngón liền kề của 2 tay:
+      ngón cái - ngón trỏ, ngón trỏ - ngón giữa,
+      ngón giữa - ngón áp út, ngón áp út - ngón út
+  (vd: đầu ngón trỏ tay trái -> đầu ngón cái tay trái -> đầu ngón cái tay
+  phải -> đầu ngón trỏ tay phải). Mỗi tứ giác có màu viền riêng và 1 hiệu ứng
+  riêng (xen kẽ nhau) áp lên vùng ảnh BÊN TRONG nó.
+- Nếu không có ngón nào của 1 tứ giác đang giơ ra thì ẩn tứ giác đó.
+- Hiệu ứng áp lên các vùng tứ giác đổi mỗi khi ngón cái và ngón trỏ của MỘT tay
   (trái hoặc phải) chạm vào nhau (cử chỉ "chụm ngón" - pinch), xoay vòng qua
   13 hiệu ứng (xem COLOR_EFFECT_CYCLE trong utils.py): đảo màu -> bỏ đỏ -> bỏ
   xanh lá -> bỏ xanh dương -> pixelate -> nhiễu hạt -> xoáy -> sóng nước ->
@@ -26,8 +29,13 @@ import cv2
 from utils import (
     detect_hands, log_hand_gesture,
     get_two_hand_quad_points, draw_quad_outline, draw_quad_vertices,
-    is_pinching, apply_quad_color_effect, COLOR_EFFECT_CYCLE,
+    is_pinching, COLOR_EFFECT_CYCLE,
+    FINGER_PAIR_QUADS, is_finger_pair_visible, apply_multi_quad_effects,
 )
+
+# False: ẩn tứ giác khi KHÔNG có ngón nào của nó đang giơ.
+# True : chỉ hiện tứ giác khi TẤT CẢ ngón của nó đều đang giơ.
+QUAD_REQUIRE_ALL_FINGERS_UP = False
 
 # Chỉ ghi log cử chỉ tay mỗi N frame để tránh ghi quá nhiều dòng trùng lặp.
 RECOGNIZE_EVERY_N_FRAMES = 15
@@ -85,21 +93,30 @@ def main():
         # đầu ngón tay TRƯỚC, rồi mới vẽ nhãn của từng tay đè lên trên, để
         # chúng luôn hiện rõ dù nằm trong hay ngoài vùng đó.
         if left_hand and right_hand:
-            quad_points = get_two_hand_quad_points(
-                left_hand["landmarks"], right_hand["landmarks"], frame_w, frame_h,
-            )
-            current_effect = COLOR_EFFECT_CYCLE[current_effect_index]
-            apply_quad_color_effect(frame, quad_points, current_effect)
-            draw_quad_outline(frame, quad_points)
-            draw_quad_vertices(frame, quad_points)
+            quads_with_effects = []
+            visible_quads = []
+            for pair_index, (name, tip_a, tip_b, outline_color) in enumerate(FINGER_PAIR_QUADS):
+                if not is_finger_pair_visible(
+                    left_hand["fingers_up"], right_hand["fingers_up"],
+                    tip_a, tip_b, require_all=QUAD_REQUIRE_ALL_FINGERS_UP,
+                ):
+                    continue  # không có ngón nào giơ ra -> ẩn tứ giác này
 
-            # Hiện tên hiệu ứng hiện tại ngay phía trên tứ giác
-            quad_top_point = min(quad_points, key=lambda p: p[1])
-            # cv2.putText(
-            #     frame, f"Hieu ung: {current_effect}",
-            #     (quad_top_point[0], max(quad_top_point[1] - 15, 20)),
-            #     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2,
-            # )
+                quad_points = get_two_hand_quad_points(
+                    left_hand["landmarks"], right_hand["landmarks"],
+                    frame_w, frame_h, tip_id_a=tip_a, tip_id_b=tip_b,
+                )
+                # Mỗi tứ giác lệch 1 bước trong vòng hiệu ứng -> các dải liền
+                # kề luôn có hiệu ứng khác nhau (xen kẽ).
+                effect = COLOR_EFFECT_CYCLE[
+                    (current_effect_index + pair_index) % len(COLOR_EFFECT_CYCLE)]
+                quads_with_effects.append((quad_points, effect))
+                visible_quads.append((quad_points, outline_color))
+
+            apply_multi_quad_effects(frame, quads_with_effects)
+            for quad_points, outline_color in visible_quads:
+                draw_quad_outline(frame, quad_points, color=outline_color)
+                draw_quad_vertices(frame, quad_points, color=outline_color, radius=6)
 
         for hand in hands_info:
             # Ghi log cử chỉ tay theo 1 nhịp cố định, tránh ghi log ở mọi frame
