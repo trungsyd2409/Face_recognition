@@ -132,6 +132,7 @@ def detect_emotion(face_img):
             img_path=face_img,
             actions=["emotion"],
             enforce_detection=False,  # không bắt buộc phải detect lại (đã crop sẵn)
+            detector_backend="skip",  # bỏ qua detect lại (opencv/haarcascade không có sẵn), dùng thẳng ảnh đã crop
             silent=True,
         )
         # DeepFace.analyze trả về list các dict (1 dict cho mỗi khuôn mặt tìm thấy)
