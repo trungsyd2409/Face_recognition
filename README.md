@@ -20,7 +20,9 @@ bản: nắm tay, xòe tay, thumbs up, hoặc đếm số ngón đang giơ.
 face_recognition_project/
 ├── requirements.txt      # danh sách thư viện cần cài
 ├── utils.py              # các hàm dùng chung (detect, recognize/emotion, log)
-├── slime_effect.py       # hiệu ứng slime (gel) giữa ngón cái và ngón trỏ - metaball
+├── model3d.py            # đọc file .obj/.fbx + tự chiếu & vẽ model 3D bằng numpy
+├── hand_control.py       # chuyển cử chỉ tay thành xoay / zoom / di chuyển / đổi model
+├── models_3d/            # bỏ file model 3D của bạn vào đây (.obj, .fbx, .glb...)
 ├── main_webcam.py        # chạy qua webcam thời gian thực - NHẬN DIỆN CẢM XÚC
 ├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn - nhận diện danh tính
 ├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây - dùng cho main_static.py
@@ -100,19 +102,39 @@ python main_webcam.py
   cử chỉ (vd. `Right: Xoe tay`, `Left: Thumbs up`, `Right: 2 ngon tay`).
 - Nhấn phím `q` để thoát.
 
-### Hiệu ứng slime giữa 2 ngón
+### Xem model 3D bằng cử chỉ tay
 
-Ngón cái và ngón trỏ của mỗi tay biến thành 2 khối gel dính nhau (kỹ thuật
-metaball trong `slime_effect.py`):
+Model trong thư mục `models_3d/` được tự chiếu và vẽ đè lên hình webcam bằng
+numpy thuần (`model3d.py`), không dùng OpenGL.
 
-- 2 ngón gần nhau → dính thành 1 khối liền.
-- Kéo ra xa → sợi slime thắt eo lại, võng xuống theo trọng lực và rung nhẹ.
-- Kéo quá xa → sợi **đứt**, sinh vài giọt slime rơi xuống khung hình.
-- Bề mặt có khúc xạ nhẹ (ảnh nền bị bẻ cong), viền sáng và đốm sáng phản chiếu.
+| Cử chỉ | Tác dụng |
+|---|---|
+| Chụm ngón cái + trỏ rồi kéo tay | Xoay model (ngang = xoay quanh trục đứng, dọc = lật lên xuống) |
+| 2 tay đưa xa / lại gần nhau | Phóng to / thu nhỏ |
+| Nắm tay rồi di chuyển | Kéo model đi trong khung hình |
+| Giơ N ngón (1 tay, giữ yên 1 nhịp) | Đổi sang model thứ N trong danh sách |
 
-Chỉnh nhanh ở đầu class `SlimeEffect` trong `slime_effect.py`: `gel_color` (màu),
-`break_ratio` (kéo bao xa thì đứt), `blob_ratio` (độ to của khối gel),
-`render_scale` (giảm xuống 0.4 nếu máy yếu).
+Phím tắt: `q` thoát · `r` đặt lại góc nhìn · `w` bật/tắt khung dây · `n` model
+kế tiếp · `s` bật/tắt tự xoay · `h` ẩn/hiện bảng hướng dẫn.
+
+**Định dạng model:** `.obj` đọc trực tiếp. `.fbx/.glb/.gltf/.stl/.ply` sẽ được
+tự convert sang `.obj` nếu máy có **assimp CLI** hoặc **Blender** trong PATH
+(kết quả lưu lại nên chỉ convert 1 lần). Không có công cụ nào thì tự export
+bằng Blender (`File > Export > Wavefront .obj`), Unity (package *FBX Exporter*),
+hoặc web `imagetostl.com` / `convert3d.org`.
+
+**Các bước render trong `model3d.py`** (đúng quy trình đồ hoạ 3D cơ bản):
+
+1. Đọc `.obj` → mảng đỉnh + mảng mặt tam giác
+2. Chuẩn hoá: dời tâm về gốc toạ độ, thu về bán kính 1
+3. Xoay (ma trận xoay) và phóng to/thu nhỏ
+4. Chiếu phối cảnh: `u = cx + f·x/z`, `v = cy − f·y/z`
+5. Cull mặt sau: bỏ mặt quay lưng về camera (xét dấu diện tích tam giác đã chiếu)
+6. Sắp xếp độ sâu: vẽ mặt xa trước, mặt gần sau (thuật toán "painter")
+7. Tô màu theo định luật Lambert (mặt hướng về nguồn sáng thì sáng hơn)
+
+Model trên ~4000 mặt được tự giảm bớt bằng vertex clustering để giữ tốc độ thời
+gian thực (đo trong sandbox: ~3–5 ms/frame cho model ~3800 mặt).
 
 Nếu webcam của bạn không phải camera số 0 (máy có nhiều camera), sửa dòng
 `cv2.VideoCapture(0)` trong `main_webcam.py` thành `1`, `2`,...

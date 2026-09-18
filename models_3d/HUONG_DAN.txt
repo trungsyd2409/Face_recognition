@@ -1,0 +1,29 @@
+THƯ MỤC MODEL 3D
+================
+
+Bỏ các file model 3D vào đây, main_webcam.py sẽ tự tìm và nạp.
+
+Định dạng đọc trực tiếp (không cần cài gì thêm):
+    .obj        (Wavefront OBJ - khuyến nghị)
+
+Định dạng cần convert (chương trình tự làm nếu máy có công cụ):
+    .fbx .glb .gltf .dae .stl .ply
+
+Chương trình dò công cụ convert theo thứ tự: assimp CLI -> Blender. File convert
+xong được lưu cạnh file gốc với đuôi ".converted.obj", lần sau dùng lại luôn.
+
+Nếu máy không có assimp/Blender, tự convert sang .obj bằng 1 trong các cách:
+    - Blender:  File > Export > Wavefront (.obj)
+    - assimp CLI:  assimp export model.fbx model.obj
+    - Unity: package "FBX Exporter", hoặc script ObjExporter
+    - Web (không cài gì, nhưng phải upload file lên mạng):
+        imagetostl.com/convert/file/fbx/to/obj
+        convert3d.org/fbx-to-obj
+
+Lưu ý:
+- Model trên ~4000 mặt sẽ được tự động giảm bớt (vertex clustering) cho chạy
+  mượt. Muốn đổi ngưỡng: sửa DEFAULT_MAX_FACES trong model3d.py.
+- Renderer chỉ dùng hình khối (đỉnh + mặt), KHÔNG đọc texture/material, nên
+  model hiện ra 1 màu đồng nhất có đổ sáng.
+- Thứ tự model trong danh sách = thứ tự tên file (A-Z). Giơ 1 ngón = model đầu
+  tiên, 2 ngón = model thứ hai, v.v.
