@@ -20,7 +20,9 @@ bản: nắm tay, xòe tay, thumbs up, hoặc đếm số ngón đang giơ.
 face_recognition_project/
 ├── requirements.txt      # danh sách thư viện cần cài
 ├── utils.py              # các hàm dùng chung (detect, recognize/emotion, log)
-├── slime_effect.py       # hiệu ứng slime (gel) giữa ngón cái và ngón trỏ - metaball
+├── model3d.py            # đọc file .obj/.fbx + rasteriser 3D thuần numpy
+├── palm_ar.py            # dựng hệ trục lòng bàn tay + vẽ hologram đứng trên tay
+├── models_3d/            # bỏ file model 3D của bạn vào đây (.obj, .fbx, .glb...)
 ├── main_webcam.py        # chạy qua webcam thời gian thực - NHẬN DIỆN CẢM XÚC
 ├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn - nhận diện danh tính
 ├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây - dùng cho main_static.py
@@ -100,19 +102,66 @@ python main_webcam.py
   cử chỉ (vd. `Right: Xoe tay`, `Left: Thumbs up`, `Right: 2 ngon tay`).
 - Nhấn phím `q` để thoát.
 
-### Hiệu ứng slime giữa 2 ngón
+### Hologram đứng trên lòng bàn tay
 
-Ngón cái và ngón trỏ của mỗi tay biến thành 2 khối gel dính nhau (kỹ thuật
-metaball trong `slime_effect.py`):
+Xoè bàn tay ra trước camera, model 3D trong `models_3d/` sẽ đứng ngay trên lòng
+bàn tay bạn, nghiêng và xoay theo tay, có bóng đổ, vòng sáng dưới chân và vạch
+quét kiểu hologram. Hai tay trong khung hình thì mỗi tay một hologram.
 
-- 2 ngón gần nhau → dính thành 1 khối liền.
-- Kéo ra xa → sợi slime thắt eo lại, võng xuống theo trọng lực và rung nhẹ.
-- Kéo quá xa → sợi **đứt**, sinh vài giọt slime rơi xuống khung hình.
-- Bề mặt có khúc xạ nhẹ (ảnh nền bị bẻ cong), viền sáng và đốm sáng phản chiếu.
+| Cử chỉ / phím | Tác dụng |
+|---|---|
+| Xoè bàn tay ra trước camera | Hologram hiện lên trên lòng bàn tay |
+| Nghiêng / xoay bàn tay | Model nghiêng xoay theo |
+| Nắm tay lại | Tắt hologram của tay đó |
+| `n` | Đổi sang model kế tiếp |
+| `[` `]` | Thu nhỏ / phóng to hologram |
+| `w` `s` `h` `q` | Khung dây · tự xoay · ẩn hướng dẫn · thoát |
 
-Chỉnh nhanh ở đầu class `SlimeEffect` trong `slime_effect.py`: `gel_color` (màu),
-`break_ratio` (kéo bao xa thì đứt), `blob_ratio` (độ to của khối gel),
-`render_scale` (giảm xuống 0.4 nếu máy yếu).
+**Toán đằng sau** (`palm_ar.py`): chỉ cần 3 landmark là dựng được cả mặt phẳng
+lòng bàn tay trong không gian 3D, vì MediaPipe trả về cả toạ độ `z` tương đối:
+
+```
+u = chuẩn hoá(gốc ngón út − gốc ngón trỏ)        # trục ngang lòng bàn tay
+f = chuẩn hoá(trung điểm 2 gốc ngón − cổ tay)    # trục dọc theo ngón tay
+n = chuẩn hoá(f × u)                             # pháp tuyến lòng bàn tay
+v = n × u                                        # trục còn lại trong mặt phẳng
+```
+
+Model được đặt vào hệ trục này, đáy chạm mặt phẳng lòng bàn tay. Một chi tiết
+đáng chú ý: nếu dựng model thẳng đúng theo pháp tuyến `n` thì khi xoè tay đối
+diện camera, `n` chĩa thẳng vào ống kính nên ta nhìn model từ nóc xuống, trông
+bẹt dí. Vì vậy trục đứng thực tế là pha trộn `up = (1−lean)·n + lean·f` với
+`lean ≈ 0.7` — model vẫn bám theo tay nhưng luôn nhìn thấy khối.
+
+Phép chiếu ở chế độ này là **chiếu trực giao yếu** (lấy thẳng thành phần x, y
+của điểm 3D, z chỉ dùng để sắp xếp độ sâu) — với vật nhỏ nằm gọn trên bàn tay
+thì gần như không khác chiếu phối cảnh đầy đủ mà đơn giản hơn nhiều.
+
+**Các bước render trong `model3d.py`** (đúng quy trình đồ hoạ 3D cơ bản):
+
+1. Đọc `.obj` → mảng đỉnh + mảng mặt tam giác
+2. Chuẩn hoá: dời tâm về gốc toạ độ, thu về bán kính 1
+3. Đặt vào hệ trục bàn tay (hoặc xoay/scale ở chế độ xem thường)
+4. Chiếu xuống 2D
+5. Cull mặt sau: bỏ mặt quay lưng về camera (xét dấu diện tích tam giác đã chiếu)
+6. Sắp xếp độ sâu: vẽ mặt xa trước, mặt gần sau (thuật toán "painter")
+7. Tô màu theo định luật Lambert (mặt hướng về nguồn sáng thì sáng hơn)
+
+Ba bước cuối nằm trong hàm dùng chung `draw_faces`, nhận vào mảng đỉnh đã chiếu
+sẵn.
+
+**Định dạng model:** `.obj` đọc trực tiếp. `.fbx/.glb/.gltf/.stl/.ply` sẽ được
+tự convert sang `.obj` nếu máy có **assimp CLI** hoặc **Blender** trong PATH
+(kết quả lưu lại nên chỉ convert 1 lần). Không có công cụ nào thì tự export
+bằng Blender (`File > Export > Wavefront .obj`), Unity (package *FBX Exporter*),
+hoặc web `imagetostl.com` / `convert3d.org`.
+
+Model trên ~4000 mặt được tự giảm bớt bằng vertex clustering để giữ tốc độ thời
+gian thực (đo trong sandbox: ~18 ms/frame cho 2 tay với model ~1300 mặt).
+
+Tinh chỉnh ở `__init__` của `PalmHologram` trong `palm_ar.py`: `size_ratio` (cỡ
+model so với bàn tay), `lean` (độ ngả), `hover` (nhấc lên khỏi tay), `spin_speed`
+(tốc độ tự xoay), `color`, `alpha`, `scanlines`, `edges`.
 
 Nếu webcam của bạn không phải camera số 0 (máy có nhiều camera), sửa dòng
 `cv2.VideoCapture(0)` trong `main_webcam.py` thành `1`, `2`,...
