@@ -6,24 +6,12 @@ Các hàm dùng chung cho cả webcam và ảnh/video tĩnh:
 - log_recognition: ghi lại kết quả nhận diện danh tính vào file CSV
 - detect_hands: phát hiện bàn tay + nhận diện cử chỉ cơ bản trong 1 frame (dùng
   MediaPipe Tasks API - HandLandmarker) - dùng cho main_webcam.py
-- draw_hand_landmarks: vẽ khung xương/khớp ngón tay lên frame (hiện KHÔNG dùng
-  trong main_webcam.py nữa - chỉ giữ lại tứ giác + các đỉnh của tứ giác)
+- draw_hand_landmarks: vẽ khung xương/khớp ngón tay lên frame
 - log_hand_gesture: ghi lại kết quả nhận diện cử chỉ tay vào file CSV riêng
-- get_two_hand_quad_points: khi có đủ 2 tay (trái + phải), tính 4 điểm góc tứ giác
-  nối 1 cặp đầu ngón tay bất kỳ (mặc định: ngón cái + ngón trỏ) của 2 tay
-- invert_quad_region: đảo màu (âm bản) vùng ảnh nằm trong 1 tứ giác
-- zero_color_channel_in_quad: đặt 1 kênh màu (r/g/b) về 0 cho vùng ảnh trong 1 tứ giác
-- draw_quad_outline: vẽ đường viền khép kín nối các điểm của tứ giác
-- draw_quad_vertices: vẽ các chấm tròn đánh dấu 4 điểm góc (đỉnh) của tứ giác
-- is_pinching: kiểm tra 1 bàn tay có đang "chụm" ngón cái + ngón trỏ lại (chạm nhau)
-  hay không
 - get_fingers_up: trả về trạng thái giơ/gập của 5 ngón của 1 bàn tay
-- FINGER_PAIR_QUADS / is_finger_pair_visible / apply_multi_quad_effects: 4 tứ giác
-  giữa 2 tay (cái-trỏ, trỏ-giữa, giữa-áp út, áp út-út), ẩn tứ giác nếu không có
-  ngón nào của nó đang giơ, mỗi tứ giác 1 hiệu ứng + màu viền khác nhau
-- apply_quad_color_effect: áp 1 trong 13 hiệu ứng (COLOR_EFFECT_CYCLE) lên vùng
-  ảnh nằm trong 1 tứ giác: đảo màu, bỏ kênh r/g/b, pixelate, nhiễu hạt, xoáy,
-  sóng nước, blur, cạnh viền, heatmap nhiệt, grayscale, sepia
+- FingerHold: giữ trạng thái ngón thêm vài frame để hiệu ứng không chớp tắt
+- is_pinching: kiểm tra 1 bàn tay có đang "chụm" ngón cái + ngón trỏ lại (chạm
+  nhau) hay không - dùng làm cử chỉ xoay model 3D
 
 Lưu ý: từ OpenCV 5.0, CascadeClassifier (Haar Cascade) đã bị chuyển sang module
 contrib riêng, không còn có sẵn trong opencv-python mặc định. Vì vậy project này
@@ -230,33 +218,82 @@ def draw_hand_landmarks(frame, hand_landmarks):
         cv2.circle(frame, point, 4, (0, 200, 0), -1)
 
 
-def get_fingers_up(landmarks, handedness):
+def get_fingers_up(landmarks, handedness=None):
     """
     Trả về list 5 phần tử [thumb, index, middle, ring, pinky], mỗi phần tử là
     1 (ngón đang giơ) hoặc 0 (ngón đang gập).
 
-    Cách làm: với mỗi ngón, so sánh vị trí đầu ngón (tip) với 1 khớp gần đó -
-    nếu tip "vươn ra xa hơn" thì coi là ngón đang giơ (extended).
+    Cách làm: SO SÁNH KHOẢNG CÁCH TỚI CỔ TAY. Ngón duỗi ra thì đầu ngón (tip)
+    nằm xa cổ tay hơn hẳn khớp giữa (pip); ngón gập lại thì đầu ngón cụp vào
+    nên khoảng cách đó ngắn lại.
+
+    Cách cũ (so sánh toạ độ y: tip cao hơn pip thì coi là giơ) chỉ đúng khi bàn
+    tay dựng thẳng đứng - hơi nghiêng tay hoặc chĩa ngón sang ngang là ngón bị
+    đọc nhầm thành gập, gây hiện tượng hiệu ứng ở ngón trỏ chớp tắt liên tục.
+    Cách so khoảng cách này không phụ thuộc vào hướng đặt tay.
+
+    Tham số `handedness` không còn cần thiết, giữ lại cho tương thích ngược.
     """
+    wrist = landmarks[0]
     fingers_up = []
 
-    # Ngón cái: so sánh toạ độ x giữa đầu ngón và khớp IP, hướng so sánh phụ
-    # thuộc vào đây là tay trái hay tay phải.
-    thumb_tip = landmarks[_FINGER_TIP_IDS[0]]
-    thumb_ip = landmarks[_FINGER_TIP_IDS[0] - 1]
-    if handedness == "Right":
-        fingers_up.append(1 if thumb_tip.x < thumb_ip.x else 0)
-    else:
-        fingers_up.append(1 if thumb_tip.x > thumb_ip.x else 0)
+    # Ngón cái: so khoảng cách từ gốc ngón trỏ (5) tới đầu ngón cái (4) và tới
+    # khớp IP (3). Ngón cái duỗi ra thì đầu ngón xa gốc ngón trỏ hơn.
+    index_mcp = landmarks[5]
+    thumb_tip = landmarks[4]
+    thumb_ip = landmarks[3]
+    fingers_up.append(
+        1 if _landmark_distance(index_mcp, thumb_tip) >
+             _landmark_distance(index_mcp, thumb_ip) * 1.10 else 0
+    )
 
-    # 4 ngón còn lại (index, middle, ring, pinky): ngón đang giơ nếu đầu ngón
-    # (tip) nằm cao hơn (toạ độ y nhỏ hơn) khớp giữa (pip).
-    for tip_id in _FINGER_TIP_IDS[1:]:
+    # 4 ngón còn lại: đầu ngón (tip) phải xa cổ tay hơn khớp giữa (pip)
+    for tip_id in (8, 12, 16, 20):
         tip = landmarks[tip_id]
         pip = landmarks[tip_id - 2]
-        fingers_up.append(1 if tip.y < pip.y else 0)
+        fingers_up.append(
+            1 if _landmark_distance(wrist, tip) >
+                 _landmark_distance(wrist, pip) * 1.08 else 0
+        )
 
     return fingers_up
+
+
+class FingerHold:
+    """
+    Giữ trạng thái ngón tay thêm vài frame trước khi cho là đã gập.
+
+    MediaPipe thỉnh thoảng nhận diện lệch 1-2 frame, khiến 1 ngón (hay gặp nhất
+    là ngón trỏ khi nó che lấp ngón khác) bị đọc thành gập rồi giơ lại ngay -
+    hiệu ứng gắn trên ngón đó sẽ chớp tắt khó chịu. Lớp này nhớ lần cuối mỗi
+    ngón được thấy là đang giơ, và chỉ tắt sau `hold` frame liên tiếp không thấy.
+    """
+
+    def __init__(self, hold=4):
+        self.hold = hold
+        self._counters = {}
+
+    def apply(self, hands_info):
+        """Sửa trực tiếp trường `fingers_up` của từng bàn tay trong danh sách."""
+        seen = set()
+        for hand in hands_info:
+            handedness = hand["handedness"]
+            seen.add(handedness)
+            counters = self._counters.setdefault(handedness, [0] * 5)
+
+            held = []
+            for i, up in enumerate(hand["fingers_up"]):
+                if up:
+                    counters[i] = self.hold
+                elif counters[i] > 0:
+                    counters[i] -= 1
+                held.append(1 if counters[i] > 0 else 0)
+            hand["fingers_up"] = held
+
+        for handedness in list(self._counters):
+            if handedness not in seen:
+                self._counters.pop(handedness, None)
+        return hands_info
 
 
 def _classify_gesture(landmarks, handedness):
@@ -290,95 +327,12 @@ def log_hand_gesture(gesture):
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), gesture])
 
 
-# ==================== Tứ giác 2 tay + hiệu ứng màu vùng bên trong ====================
+# ==================== Cử chỉ "chụm ngón" (pinch) ====================
 
-# Chỉ số landmark đầu các ngón tay (tip), dùng để ghép cặp tạo tứ giác giữa 2 tay
+# Chỉ số landmark đầu ngón cái / ngón trỏ (theo chuẩn MediaPipe Hands)
 THUMB_TIP_ID = 4
 INDEX_TIP_ID = 8
-MIDDLE_TIP_ID = 12
-RING_TIP_ID = 16
-PINKY_TIP_ID = 20
 
-
-def _landmark_to_pixel(landmark, width, height):
-    """Đổi 1 điểm landmark (toạ độ chuẩn hoá 0-1) sang toạ độ pixel (x, y)."""
-    return (int(landmark.x * width), int(landmark.y * height))
-
-
-def get_two_hand_quad_points(left_landmarks, right_landmarks, width, height,
-                              tip_id_a=INDEX_TIP_ID, tip_id_b=THUMB_TIP_ID):
-    """
-    Khi có đủ landmark của 2 tay (trái + phải), trả về 4 điểm (pixel) tạo thành
-    1 tứ giác dựa trên 2 đầu ngón tay `tip_id_a` và `tip_id_b`, theo thứ tự:
-        đầu ngón A tay trái -> đầu ngón B tay trái ->
-        đầu ngón B tay phải -> đầu ngón A tay phải
-    (rồi khép kín lại về điểm đầu tiên).
-
-    Mặc định tip_id_a = ngón trỏ, tip_id_b = ngón cái - tương ứng tứ giác
-    "ngón cái - ngón trỏ" giữa 2 tay (tính năng gốc). Truyền các cặp ID khác
-    (INDEX_TIP_ID/MIDDLE_TIP_ID, MIDDLE_TIP_ID/RING_TIP_ID, RING_TIP_ID/PINKY_TIP_ID)
-    để lấy tứ giác giữa các cặp ngón còn lại.
-    """
-    left_a = _landmark_to_pixel(left_landmarks[tip_id_a], width, height)
-    left_b = _landmark_to_pixel(left_landmarks[tip_id_b], width, height)
-    right_b = _landmark_to_pixel(right_landmarks[tip_id_b], width, height)
-    right_a = _landmark_to_pixel(right_landmarks[tip_id_a], width, height)
-
-    return [left_a, left_b, right_b, right_a]
-
-
-def _quad_mask(frame, quad_points):
-    """Tạo mask (ảnh xám 0/255) đánh dấu vùng bên trong tứ giác `quad_points`."""
-    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-    pts = np.array([quad_points], dtype=np.int32)
-    cv2.fillPoly(mask, pts, 255)
-    return mask.astype(bool)
-
-
-def invert_quad_region(frame, quad_points):
-    """
-    Đảo màu (invert - giống hiệu ứng "âm bản") toàn bộ vùng ảnh nằm bên trong
-    tứ giác `quad_points` (danh sách 4 điểm pixel (x, y)). Vẽ trực tiếp lên `frame`.
-    """
-    mask_bool = _quad_mask(frame, quad_points)
-    frame[mask_bool] = 255 - frame[mask_bool]
-
-
-# Tên kênh màu (r/g/b, không phân biệt hoa thường) -> chỉ số kênh trong ảnh BGR
-# của OpenCV (kênh 0 = B, 1 = G, 2 = R).
-_CHANNEL_NAME_TO_BGR_INDEX = {"b": 0, "g": 1, "r": 2}
-
-
-def zero_color_channel_in_quad(frame, quad_points, channel):
-    """
-    Đặt kênh màu `channel` ("r", "g", hoặc "b") về 0 cho toàn bộ vùng ảnh nằm
-    bên trong tứ giác `quad_points`. Vẽ trực tiếp lên `frame`.
-
-    Lưu ý: ảnh của OpenCV lưu theo thứ tự kênh BGR (không phải RGB), hàm này tự
-    quy đổi tên kênh r/g/b sang đúng chỉ số kênh tương ứng.
-    """
-    channel_index = _CHANNEL_NAME_TO_BGR_INDEX[channel.lower()]
-    mask_bool = _quad_mask(frame, quad_points)
-    frame[mask_bool, channel_index] = 0
-
-
-def draw_quad_outline(frame, quad_points, color=(255, 255, 255), thickness=2):
-    """Vẽ đường viền khép kín nối lần lượt các điểm trong `quad_points`."""
-    pts = np.array([quad_points], dtype=np.int32)
-    cv2.polylines(frame, pts, isClosed=True, color=color, thickness=thickness)
-
-
-def draw_quad_vertices(frame, quad_points, color=(0, 200, 255), radius=8, thickness=-1):
-    """
-    Vẽ 1 chấm tròn đánh dấu tại mỗi điểm góc (đỉnh) của tứ giác `quad_points`
-    (danh sách 4 điểm pixel (x, y)) - dùng để làm nổi bật 4 đỉnh tứ giác thay
-    vì vẽ khung xương/khớp đầy đủ của bàn tay.
-    """
-    for point in quad_points:
-        cv2.circle(frame, tuple(point), radius, color, thickness)
-
-
-# ==================== Cử chỉ "chụm ngón" (pinch) 1 tay + hiệu ứng theo vùng tứ giác ====================
 
 def _landmark_distance(landmark_a, landmark_b):
     """Khoảng cách Euclid giữa 2 điểm landmark (toạ độ chuẩn hoá 0-1)."""
@@ -403,214 +357,3 @@ def is_pinching(landmarks, ratio_threshold=0.4):
 
     pinch_distance = _landmark_distance(thumb_tip, index_tip)
     return (pinch_distance / hand_size) < ratio_threshold
-
-
-# Chuỗi hiệu ứng lặp vòng khi chụm ngón (giữ 4 hiệu ứng màu cơ bản trước, các
-# hiệu ứng "nặng" hơn - biến dạng/nhiễu/cách điệu - nối tiếp theo sau, rồi quay
-# vòng lại từ đầu):
-#   đảo màu -> bỏ đỏ -> bỏ xanh lá -> bỏ xanh dương ->
-#   pixelate -> nhiễu hạt -> xoáy -> sóng nước ->
-#   blur -> cạnh viền -> heatmap nhiệt -> grayscale -> sepia -> (quay lại đảo màu)
-COLOR_EFFECT_CYCLE = [
-    "invert", "r0", "g0", "b0",
-    "pixelate", "noise", "swirl", "wave",
-    "blur", "edge", "heatmap", "grayscale", "sepia",
-]
-
-
-def _bounding_rect(quad_points, frame_shape):
-    """Tính hình chữ nhật bao quanh (bounding box) của tứ giác `quad_points`,
-    giới hạn trong kích thước `frame_shape`. Trả về (x1, y1, x2, y2)."""
-    xs = [p[0] for p in quad_points]
-    ys = [p[1] for p in quad_points]
-    x1 = max(min(xs), 0)
-    y1 = max(min(ys), 0)
-    x2 = min(max(xs), frame_shape[1])
-    y2 = min(max(ys), frame_shape[0])
-    return x1, y1, x2, y2
-
-
-def _apply_roi_effect(frame, quad_points, roi_transform_fn):
-    """
-    Áp dụng 1 hàm biến đổi ảnh `roi_transform_fn` (nhận vào 1 vùng ảnh - ROI -
-    và trả về vùng ảnh đã biến đổi, cùng kích thước) lên hình chữ nhật bao
-    quanh tứ giác, sau đó chỉ dán ngược lại `frame` tại đúng các pixel nằm bên
-    trong tứ giác (dùng mask) - để hiệu ứng không tràn ra ngoài hình tứ giác
-    dù vùng tính toán là hình chữ nhật.
-    """
-    x1, y1, x2, y2 = _bounding_rect(quad_points, frame.shape)
-    if x2 <= x1 or y2 <= y1:
-        return
-
-    mask_bool = _quad_mask(frame, quad_points)
-    roi = frame[y1:y2, x1:x2]
-    roi_effect = roi_transform_fn(roi)
-
-    effect_frame = frame.copy()
-    effect_frame[y1:y2, x1:x2] = roi_effect
-    frame[mask_bool] = effect_frame[mask_bool]
-
-
-def _pixelate_roi(roi, pixel_size=14):
-    """Vỡ ảnh thành ô vuông to (thu nhỏ rồi phóng to lại) - hiệu ứng mosaic."""
-    h, w = roi.shape[:2]
-    small_w = max(1, w // pixel_size)
-    small_h = max(1, h // pixel_size)
-    small = cv2.resize(roi, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-    return cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
-
-
-def _noise_roi(roi, amount=45):
-    """Rắc nhiễu ngẫu nhiên (Gaussian-ish) lên từng pixel, giống tín hiệu TV cũ."""
-    noise = np.random.randint(-amount, amount + 1, roi.shape, dtype=np.int16)
-    return np.clip(roi.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-
-
-def _swirl_roi(roi, strength=3.0):
-    """Xoáy ảnh quanh tâm vùng - góc xoay giảm dần theo bán kính (mạnh ở giữa)."""
-    h, w = roi.shape[:2]
-    if h < 2 or w < 2:
-        return roi
-    cx, cy = w / 2.0, h / 2.0
-    max_radius = max(min(cx, cy), 1e-5)
-
-    y_idx, x_idx = np.indices((h, w), dtype=np.float32)
-    dx = x_idx - cx
-    dy = y_idx - cy
-    radius = np.sqrt(dx ** 2 + dy ** 2)
-    theta = np.arctan2(dy, dx)
-
-    swirl_amount = strength * np.exp(-radius / max_radius)
-    new_theta = theta + swirl_amount
-
-    map_x = (cx + radius * np.cos(new_theta)).astype(np.float32)
-    map_y = (cy + radius * np.sin(new_theta)).astype(np.float32)
-
-    return cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-
-
-def _wave_roi(roi, amplitude=8.0, wavelength=25.0):
-    """Bẻ pixel theo hàm sin/cos - giống hiệu ứng nhìn qua mặt nước gợn sóng."""
-    h, w = roi.shape[:2]
-    y_idx, x_idx = np.indices((h, w), dtype=np.float32)
-    map_x = (x_idx + amplitude * np.sin(2 * np.pi * y_idx / wavelength)).astype(np.float32)
-    map_y = (y_idx + amplitude * np.cos(2 * np.pi * x_idx / wavelength)).astype(np.float32)
-    return cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-
-
-def _blur_roi(roi, ksize=27):
-    """Làm mờ mạnh (Gaussian blur) - giống hiệu ứng che mặt trên tin tức."""
-    k = ksize if ksize % 2 == 1 else ksize + 1  # kernel size phải là số lẻ
-    return cv2.GaussianBlur(roi, (k, k), 0)
-
-
-def _edge_roi(roi):
-    """Chỉ giữ lại đường viền (Canny edge detection) - giống bản phác thảo."""
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 60, 150)
-    return cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-
-
-def _heatmap_roi(roi):
-    """Tô màu giả nhiệt kiểu camera hồng ngoại (colormap JET)."""
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    return cv2.applyColorMap(gray, cv2.COLORMAP_JET)
-
-
-def _grayscale_roi(roi):
-    """Chuyển vùng ảnh sang đen trắng."""
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-
-# Ma trận chuyển màu sepia (tông nâu cổ điển) - viết theo đúng thứ tự kênh BGR
-# mà OpenCV dùng (khác thứ tự công thức sepia gốc thường viết theo RGB).
-_SEPIA_MATRIX_BGR = np.array([
-    [0.131, 0.534, 0.272],
-    [0.168, 0.686, 0.349],
-    [0.189, 0.769, 0.393],
-])
-
-
-def _sepia_roi(roi):
-    """Chuyển vùng ảnh sang tông màu nâu cổ điển (hiệu ứng sepia)."""
-    sepia = cv2.transform(roi.astype(np.float32), _SEPIA_MATRIX_BGR)
-    return np.clip(sepia, 0, 255).astype(np.uint8)
-
-
-_ROI_EFFECT_FUNCTIONS = {
-    "pixelate": _pixelate_roi,
-    "noise": _noise_roi,
-    "swirl": _swirl_roi,
-    "wave": _wave_roi,
-    "blur": _blur_roi,
-    "edge": _edge_roi,
-    "heatmap": _heatmap_roi,
-    "grayscale": _grayscale_roi,
-    "sepia": _sepia_roi,
-}
-
-
-def apply_quad_color_effect(frame, quad_points, effect):
-    """
-    Áp 1 hiệu ứng (1 phần tử của COLOR_EFFECT_CYCLE) lên vùng ảnh nằm bên
-    trong tứ giác `quad_points` - KHÔNG áp cho toàn bộ khung hình. Vẽ trực
-    tiếp lên `frame`.
-    """
-    if effect == "invert":
-        invert_quad_region(frame, quad_points)
-    elif effect in ("r0", "g0", "b0"):
-        zero_color_channel_in_quad(frame, quad_points, effect[0])  # "r0"->"r", v.v.
-    elif effect in _ROI_EFFECT_FUNCTIONS:
-        _apply_roi_effect(frame, quad_points, _ROI_EFFECT_FUNCTIONS[effect])
-
-
-# ==================== Nhiều tứ giác 2 tay (4 cặp ngón liền kề) ====================
-
-# Chỉ số ngón theo thứ tự trong list fingers_up: 0 cái, 1 trỏ, 2 giữa, 3 áp út, 4 út
-_TIP_ID_TO_FINGER_INDEX = {
-    THUMB_TIP_ID: 0, INDEX_TIP_ID: 1, MIDDLE_TIP_ID: 2, RING_TIP_ID: 3, PINKY_TIP_ID: 4,
-}
-
-# 4 tứ giác giữa 2 tay, mỗi tứ giác nối 1 cặp ngón liền kề. Mỗi phần tử gồm:
-#   (tên, tip_id_a, tip_id_b, màu viền BGR)
-# Màu viền xen kẽ khác nhau để dễ phân biệt từng dải.
-FINGER_PAIR_QUADS = [
-    ("cai-tro",      INDEX_TIP_ID,  THUMB_TIP_ID,  (0, 200, 255)),   # cam
-    ("tro-giua",     MIDDLE_TIP_ID, INDEX_TIP_ID,  (255, 0, 255)),   # hồng tím
-    ("giua-ap_ut",   RING_TIP_ID,   MIDDLE_TIP_ID, (0, 255, 0)),     # xanh lá
-    ("ap_ut-ut",     PINKY_TIP_ID,  RING_TIP_ID,   (255, 255, 0)),   # xanh ngọc
-]
-
-
-def is_finger_pair_visible(left_fingers_up, right_fingers_up, tip_id_a, tip_id_b,
-                           require_all=False):
-    """
-    Kiểm tra tứ giác của cặp ngón (tip_id_a, tip_id_b) có nên hiển thị không.
-
-    - require_all=False (mặc định): chỉ ẨN khi KHÔNG có ngón nào trong 4 ngón
-      tạo tứ giác (2 ngón x 2 tay) đang giơ ra.
-    - require_all=True: chỉ HIỆN khi cả 4 ngón đều đang giơ (chặt hơn).
-    """
-    idx_a = _TIP_ID_TO_FINGER_INDEX[tip_id_a]
-    idx_b = _TIP_ID_TO_FINGER_INDEX[tip_id_b]
-    states = [left_fingers_up[idx_a], left_fingers_up[idx_b],
-              right_fingers_up[idx_a], right_fingers_up[idx_b]]
-    return all(states) if require_all else any(states)
-
-
-def apply_multi_quad_effects(frame, quads_with_effects):
-    """
-    Áp nhiều hiệu ứng lên nhiều tứ giác cùng lúc. `quads_with_effects` là list
-    các cặp (quad_points, effect). Mọi hiệu ứng đều được tính từ khung hình GỐC
-    (chưa bị hiệu ứng nào tác động), để các tứ giác chồng lên nhau không bị
-    "cộng dồn" hiệu ứng. Vẽ trực tiếp lên `frame`.
-    """
-    if not quads_with_effects:
-        return
-    original = frame.copy()
-    for quad_points, effect in quads_with_effects:
-        effect_frame = original.copy()
-        apply_quad_color_effect(effect_frame, quad_points, effect)
-        mask_bool = _quad_mask(frame, quad_points)
-        frame[mask_bool] = effect_frame[mask_bool]

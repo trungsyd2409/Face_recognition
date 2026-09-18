@@ -20,9 +20,8 @@ bản: nắm tay, xòe tay, thumbs up, hoặc đếm số ngón đang giơ.
 face_recognition_project/
 ├── requirements.txt      # danh sách thư viện cần cài
 ├── utils.py              # các hàm dùng chung (detect, recognize/emotion, log)
-├── model3d.py            # đọc file .obj/.fbx + rasteriser 3D thuần numpy
-├── palm_ar.py            # dựng hệ trục lòng bàn tay + vẽ hologram đứng trên tay
-├── models_3d/            # bỏ file model 3D của bạn vào đây (.obj, .fbx, .glb...)
+├── particles.py          # hệ hạt: vệt lửa bắn ra từ đầu ngón tay
+├── magic_circle.py       # vòng ma pháp phát sáng tự xoay ở đầu ngón tay
 ├── main_webcam.py        # chạy qua webcam thời gian thực - NHẬN DIỆN CẢM XÚC
 ├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn - nhận diện danh tính
 ├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây - dùng cho main_static.py
@@ -102,66 +101,109 @@ python main_webcam.py
   cử chỉ (vd. `Right: Xoe tay`, `Left: Thumbs up`, `Right: 2 ngon tay`).
 - Nhấn phím `q` để thoát.
 
-### Hologram đứng trên lòng bàn tay
+### Vòng ma pháp + vệt lửa ở đầu ngón tay
 
-Xoè bàn tay ra trước camera, model 3D trong `models_3d/` sẽ đứng ngay trên lòng
-bàn tay bạn, nghiêng và xoay theo tay, có bóng đổ, vòng sáng dưới chân và vạch
-quét kiểu hologram. Hai tay trong khung hình thì mỗi tay một hologram.
+Mỗi đầu ngón **đang giơ** có một vòng ma pháp phát sáng tự xoay, đồng thời liên
+tục bắn ra các hạt sáng tắt dần và để lại vệt. Gập ngón nào thì ngón đó tắt cả
+vòng lẫn hạt; nắm tay lại là tắt hết.
+
+**Ngón cái được để trống hoàn toàn** — không vòng, không hạt (kể cả lớp hạt rải
+quanh bàn tay cũng bỏ qua các landmark của ngón cái). Trọng lực
+mặc định hướng **lên trên** nên hạt bốc lên như tàn lửa (đổi dấu `gravity` trong
+`particles.py` nếu muốn hạt rơi xuống). Vung tay càng nhanh thì hạt sinh ra càng nhiều và bắn càng mạnh theo hướng
+vung. Chụm ngón cái + trỏ thì các hạt bị hút về điểm chụm, xoáy tròn và gom lại
+thành một quả cầu sáng trong tay.
 
 | Cử chỉ / phím | Tác dụng |
 |---|---|
-| Xoè bàn tay ra trước camera | Hologram hiện lên trên lòng bàn tay |
-| Nghiêng / xoay bàn tay | Model nghiêng xoay theo |
-| Nắm tay lại | Tắt hologram của tay đó |
-| `n` | Đổi sang model kế tiếp |
-| `[` `]` | Thu nhỏ / phóng to hologram |
-| `w` `s` `h` `q` | Khung dây · tự xoay · ẩn hướng dẫn · thoát |
+| Vung tay nhanh | Hạt sinh nhiều hơn, bắn mạnh theo hướng vung |
+| Xoè 4 ngón trỏ / giữa / áp út / út | Các vòng nhỏ gộp thành 1 vòng lớn giữa lòng bàn tay, cả bàn tay ửng sáng |
+| Cả 2 tay cùng mở vòng lớn | Một chùm hạt đỏ nối thẳng 2 tâm vòng |
+| Chụm ngón cái + trỏ | Hút hạt về, xoáy tròn thành quả cầu |
+| `c` | Đổi bảng màu: lửa → băng → độc → tím (vòng ma pháp đổi theo) |
+| `x` | Bật/tắt vòng ma pháp |
+| `g` / `t` | Bật tắt trọng lực / vệt sáng |
+| `space` / `q` | Xoá hết hạt · thoát |
 
-**Toán đằng sau** (`palm_ar.py`): chỉ cần 3 landmark là dựng được cả mặt phẳng
-lòng bàn tay trong không gian 3D, vì MediaPipe trả về cả toạ độ `z` tương đối:
+**Vòng ma pháp** (`magic_circle.py`) màu đỏ, gồm 3 lớp đồng tâm quay với tốc độ
+và chiều khác nhau — đó chính là thứ tạo cảm giác "đang chạy phép": vòng ngoài
+kèm vạch chia và chấm sáng quay thuận, các cung đứt đoạn ở giữa quay ngược và
+nhanh hơn, ngôi sao 5 cánh bên trong quay nhanh nhất. Năm ngón lệch pha nhau nên
+không quay trùng nhịp.
 
-```
-u = chuẩn hoá(gốc ngón út − gốc ngón trỏ)        # trục ngang lòng bàn tay
-f = chuẩn hoá(trung điểm 2 gốc ngón − cổ tay)    # trục dọc theo ngón tay
-n = chuẩn hoá(f × u)                             # pháp tuyến lòng bàn tay
-v = n × u                                        # trục còn lại trong mặt phẳng
-```
+**Gộp thành vòng lớn:** xoè đủ 4 ngón trỏ / giữa / áp út / út (ngón cái duỗi hay
+cụp đều không tính) thì 5 vòng nhỏ trôi về tâm lòng bàn tay và
+mờ đi, đồng thời một vòng lớn hiện ra giữa lòng bàn tay, quay chậm hơn cho ra
+dáng "đại phép". Gập bớt ngón thì chạy ngược lại. Quá trình mất đúng **0,1 giây**
+(`merge_time`) — tính theo đồng hồ hệ thống chứ không theo số frame, nên máy
+nhanh hay chậm thì hiệu ứng vẫn diễn ra đúng chừng ấy lâu.
 
-Model được đặt vào hệ trục này, đáy chạm mặt phẳng lòng bàn tay. Một chi tiết
-đáng chú ý: nếu dựng model thẳng đúng theo pháp tuyến `n` thì khi xoè tay đối
-diện camera, `n` chĩa thẳng vào ống kính nên ta nhìn model từ nóc xuống, trông
-bẹt dí. Vì vậy trục đứng thực tế là pha trộn `up = (1−lean)·n + lean·f` với
-`lean ≈ 0.7` — model vẫn bám theo tay nhưng luôn nhìn thấy khối.
+Vòng lớn một khi đã hiện thì **giữ tối thiểu 1 giây** (`min_big_time`) mới được
+phép tách lại thành vòng nhỏ — nếu không, chỉ cần một frame nhận diện lệch ngón
+là vòng đã tách rồi gộp lại ngay, nhìn rất giật. Vòng lớn cũng **không có nhịp
+phồng xẹp** như vòng nhỏ (`pulse=0`), vì ở cỡ lớn cùng biên độ đó nhìn thành
+nhấp nháy to nhỏ liên tục chứ không còn là nhịp thở.
 
-Phép chiếu ở chế độ này là **chiếu trực giao yếu** (lấy thẳng thành phần x, y
-của điểm 3D, z chỉ dùng để sắp xếp độ sâu) — với vật nhỏ nằm gọn trên bàn tay
-thì gần như không khác chiếu phối cảnh đầy đủ mà đơn giản hơn nhiều.
+Khi vòng lớn mở, hệ hạt chuyển từ bắn ở đầu ngón sang **rải đều khắp bàn tay**:
+mỗi hạt được đặt tại một landmark ngẫu nhiên của bàn tay (trừ các điểm thuộc
+ngón cái) rồi lệch đi một chút, nên hạt bám đúng hình bàn tay thay vì một hình chữ nhật bao quanh.
+Nhóm hạt này gần như không chịu trọng lực (hệ số riêng 0.1, nếu không chúng bốc
+lên và rời khỏi tay), bay chậm và mờ hơn hẳn — bàn tay ửng sáng mà không át màu
+đỏ của vòng ma pháp. Chỉnh bằng `palm_glow_rate` và `palm_glow_dim` trong
+`ParticleSystem`, `big_ratio` và `merge_time` trong `MagicCircles`.
 
-**Các bước render trong `model3d.py`** (đúng quy trình đồ hoạ 3D cơ bản):
+**Chùm nối 2 tay:** khi cả hai bàn tay cùng mở vòng lớn, một chùm sáng đỏ nối
+thẳng 2 tâm vòng — gồm một dải sáng hai lớp (lõi mảnh sáng, vỏ dày mờ) và vài
+khối hạt to trôi dọc theo nó. Các khối được rải cách đều rồi cùng trôi theo thời
+gian (vị trí lấy phần lẻ của `t`) nên nhìn như dòng năng lượng chảy giữa hai
+tay; khối ở giữa to hơn khối ở hai đầu nên chùm phình ở giữa. Chỉnh bằng
+`link_dots` và `link_speed`.
 
-1. Đọc `.obj` → mảng đỉnh + mảng mặt tam giác
-2. Chuẩn hoá: dời tâm về gốc toạ độ, thu về bán kính 1
-3. Đặt vào hệ trục bàn tay (hoặc xoay/scale ở chế độ xem thường)
-4. Chiếu xuống 2D
-5. Cull mặt sau: bỏ mặt quay lưng về camera (xét dấu diện tích tam giác đã chiếu)
-6. Sắp xếp độ sâu: vẽ mặt xa trước, mặt gần sau (thuật toán "painter")
-7. Tô màu theo định luật Lambert (mặt hướng về nguồn sáng thì sáng hơn)
+Ba lớp được **vẽ sẵn một lần** vào 3 ảnh mẫu 256×256 nét dày; mỗi frame chỉ xoay
+và thu nhỏ chúng bằng `cv2.warpAffine` rồi dán vào đầu ngón. Vẽ trực tiếp từng
+nét ở cỡ nhỏ cho ra nét mảnh và nhợt; vẽ sẵn ở cỡ lớn rồi thu nhỏ thì nét đặc,
+mượt và nhanh hơn. Việc làm mờ và cộng ánh sáng chỉ chạy trong hình chữ nhật bao
+quanh các vòng, không phải cả khung hình — tiết kiệm ~8 ms/frame.
 
-Ba bước cuối nằm trong hàm dùng chung `draw_faces`, nhận vào mảng đỉnh đã chiếu
-sẵn.
+**Hệ hạt** (`particles.py`):
 
-**Định dạng model:** `.obj` đọc trực tiếp. `.fbx/.glb/.gltf/.stl/.ply` sẽ được
-tự convert sang `.obj` nếu máy có **assimp CLI** hoặc **Blender** trong PATH
-(kết quả lưu lại nên chỉ convert 1 lần). Không có công cụ nào thì tự export
-bằng Blender (`File > Export > Wavefront .obj`), Unity (package *FBX Exporter*),
-hoặc web `imagetostl.com` / `convert3d.org`.
+1. **Sinh hạt** — mỗi frame, tại mỗi đầu ngón sinh vài hạt. Vận tốc ban đầu lấy
+   từ chính vận tốc của đầu ngón (hiệu vị trí so với frame trước), nên hạt bay
+   theo hướng bạn vung tay.
+2. **Vật lý** — mọi thuộc tính của hạt là **mảng numpy**, không phải danh sách
+   object, nên cả nghìn hạt chỉ tốn vài phép tính mảng mỗi frame:
+   `vận tốc += trọng lực` → `vận tốc *= cản` → `vị trí += vận tốc` → `tuổi -= 1`.
+   Trọng lực mang giá trị âm (trục y của ảnh hướng xuống) nên hạt bay lên.
+3. **Hút khi chụm ngón** — lực hút giảm theo `1/r` (có chặn khoảng cách tối
+   thiểu, nếu không hạt sát tâm sẽ nhận lực quá lớn và bị bắn văng đi), cộng
+   thêm thành phần vuông góc để hạt xoáy quanh tâm. Hạt vào gần thì bị hãm lại
+   và sống lâu hơn, tạo thành quả cầu.
+4. **Vẽ** — không vẽ từng hạt bằng `cv2.circle`. Màu các hạt được cộng dồn vào
+   một ảnh đệm độ phân giải thấp bằng `np.add.at`, làm mờ 2 lần (bán kính nhỏ
+   cho lõi, bán kính lớn cho quầng), rồi **cộng** vào khung hình (additive
+   blending) như ánh sáng thật. Ảnh đệm được giữ lại một phần qua các frame nên
+   hạt kéo theo vệt mờ dần.
 
-Model trên ~4000 mặt được tự giảm bớt bằng vertex clustering để giữ tốc độ thời
-gian thực (đo trong sandbox: ~18 ms/frame cho 2 tay với model ~1300 mặt).
+Màn hình chỉ có hình webcam và hiệu ứng hạt — không hiện chữ hướng dẫn nào.
 
-Tinh chỉnh ở `__init__` của `PalmHologram` trong `palm_ar.py`: `size_ratio` (cỡ
-model so với bàn tay), `lean` (độ ngả), `hover` (nhấc lên khỏi tay), `spin_speed`
-(tốc độ tự xoay), `color`, `alpha`, `scanlines`, `edges`.
+Đo trong sandbox: ~17 ms/frame với 2 tay, cả hạt lẫn vòng ma pháp.
+
+Tinh chỉnh ở `__init__` của `ParticleSystem`: `max_particles`, `spawn_per_tip`,
+`speed_spawn` (độ nhạy với tốc độ vung tay), `speed_scale` (nhân vận tốc ban
+đầu, mặc định 1.5), `gravity` (âm = bay lên), `drag`, `life_range`,
+`pull_strength`, `trail` (độ dài vệt), `brightness` (độ chói — hạ xuống nếu thấy loá), `render_scale` (giảm nếu máy yếu).
+
+Tinh chỉnh vòng ma pháp ở `__init__` của `MagicCircles`: `radius_ratio` (cỡ
+vòng), `spin_speed` (tốc độ quay), `ticks` / `arcs` (số vạch chia và số cung),
+`color` (mặc định đỏ), `glow` (độ chói), `blur` (độ toả sáng quanh nét).
+
+**Về việc nhận biết ngón đang giơ** (`utils.get_fingers_up`): cách phổ biến là
+so toạ độ y của đầu ngón với khớp giữa, nhưng cách đó chỉ đúng khi bàn tay dựng
+thẳng — hơi nghiêng tay là ngón trỏ bị đọc nhầm thành gập, làm hiệu ứng chớp
+tắt. Ở đây dùng **so khoảng cách tới cổ tay**: đầu ngón duỗi ra thì xa cổ tay
+hơn hẳn khớp giữa, đúng với mọi hướng đặt tay. Thêm lớp `FingerHold` giữ trạng
+thái ngón 4 frame trước khi cho là đã gập, để vài frame nhận diện lỗi không làm
+hiệu ứng nhấp nháy.
 
 Nếu webcam của bạn không phải camera số 0 (máy có nhiều camera), sửa dòng
 `cv2.VideoCapture(0)` trong `main_webcam.py` thành `1`, `2`,...
