@@ -118,7 +118,7 @@ thành một quả cầu sáng trong tay.
 |---|---|
 | Vung tay nhanh | Hạt sinh nhiều hơn, bắn mạnh theo hướng vung |
 | Xoè 4 ngón trỏ / giữa / áp út / út | Các vòng nhỏ gộp thành 1 vòng lớn giữa lòng bàn tay, cả bàn tay ửng sáng |
-| Cả 2 tay cùng mở vòng lớn | Một chùm hạt đỏ nối thẳng 2 tâm vòng |
+| Cả 2 tay cùng mở vòng lớn | Chùm đỏ nối 2 tâm vòng, hạt đỏ toả ra hai bên, vùng quanh chùm bị đảo màu (âm bản) |
 | Chụm ngón cái + trỏ | Hút hạt về, xoáy tròn thành quả cầu |
 | `c` | Đổi bảng màu: lửa → băng → độc → tím (vòng ma pháp đổi theo) |
 | `x` | Bật/tắt vòng ma pháp |
@@ -138,11 +138,23 @@ dáng "đại phép". Gập bớt ngón thì chạy ngược lại. Quá trình 
 (`merge_time`) — tính theo đồng hồ hệ thống chứ không theo số frame, nên máy
 nhanh hay chậm thì hiệu ứng vẫn diễn ra đúng chừng ấy lâu.
 
-Vòng lớn một khi đã hiện thì **giữ tối thiểu 1 giây** (`min_big_time`) mới được
-phép tách lại thành vòng nhỏ — nếu không, chỉ cần một frame nhận diện lệch ngón
-là vòng đã tách rồi gộp lại ngay, nhìn rất giật. Vòng lớn cũng **không có nhịp
-phồng xẹp** như vòng nhỏ (`pulse=0`), vì ở cỡ lớn cùng biên độ đó nhìn thành
-nhấp nháy to nhỏ liên tục chứ không còn là nhịp thở.
+Trạng thái vòng do một **máy trạng thái** quyết định, không bám theo kết quả
+nhận diện từng frame — MediaPipe luôn rung nhẹ ở ngón áp út và ngón út khi bàn
+tay hơi nghiêng, nếu bám thẳng vào đó thì vòng lớn co bóp liên tục. Luật chuyển
+trạng thái là **bất đối xứng** (vào dễ, ra khó):
+
+- NHỎ → LỚN: ngay khi đủ 4 ngón xoè
+- LỚN → NHỎ: phải thoả **cả hai** — đã ở trạng thái lớn ít nhất `min_big_time`
+  (1 giây) **và** điều kiện thiếu ngón kéo dài liên tục ít nhất `exit_delay`
+  (0,35 giây); chỉ cần một frame đọc lại đủ ngón là đồng hồ chờ này reset
+
+Biến `merge` (0..1) chỉ còn là biến chạy hoạt hình đi theo trạng thái. Vòng lớn
+cũng **không có nhịp phồng xẹp** như vòng nhỏ (`pulse=0`), vì ở cỡ lớn cùng biên
+độ đó nhìn thành nhấp nháy chứ không còn là nhịp thở.
+
+Đo trong sandbox (mô phỏng 30 fps, 25–30% số frame bị đọc hụt một ngón): diện
+tích vòng lớn dao động 0,7% — phần còn lại là do hoa văn quay, không phải co
+bóp. Gập ngón thật và giữ nguyên thì vòng tách sau ~0,47 giây.
 
 Khi vòng lớn mở, hệ hạt chuyển từ bắn ở đầu ngón sang **rải đều khắp bàn tay**:
 mỗi hạt được đặt tại một landmark ngẫu nhiên của bàn tay (trừ các điểm thuộc
@@ -153,8 +165,18 @@ lên và rời khỏi tay), bay chậm và mờ hơn hẳn — bàn tay ửng s�
 `ParticleSystem`, `big_ratio` và `merge_time` trong `MagicCircles`.
 
 **Chùm nối 2 tay:** khi cả hai bàn tay cùng mở vòng lớn, một chùm sáng đỏ nối
-thẳng 2 tâm vòng — gồm một dải sáng hai lớp (lõi mảnh sáng, vỏ dày mờ) và vài
-khối hạt to trôi dọc theo nó. Các khối được rải cách đều rồi cùng trôi theo thời
+thẳng 2 tâm vòng — gồm một dải sáng hai lớp (lõi mảnh sáng, vỏ dày mờ), vài khối
+hạt to trôi dọc theo nó, **hạt đỏ liên tục toả ra hai bên** (bắn theo phương
+vuông góc với chùm — `ParticleSystem.emit_link`, nhóm hạt này giữ màu đỏ cố định
+thay vì màu theo bảng màu), và **vùng không gian quanh chùm bị đảo màu** thành
+âm bản.
+
+Vùng đảo màu là một hình bầu dục ôm lấy đoạn nối, nhưng **chừa ra một hành lang
+dọc giữa** cho chùm sáng chạy qua. Phải chừa vì cảnh webcam thường tối: đảo màu
+xong vùng đó sáng trắng, mà chùm lại vẽ theo kiểu cộng ánh sáng — cộng lên nền
+đã sáng thì cháy trắng và mất hẳn màu đỏ. Chừa hành lang thì chùm vẫn chạy trên
+nền tối và giữ màu, còn hai dải âm bản nằm hai bên. Chỉnh bằng `invert_ratio`,
+`invert_gap` và `invert_feather`. Các khối được rải cách đều rồi cùng trôi theo thời
 gian (vị trí lấy phần lẻ của `t`) nên nhìn như dòng năng lượng chảy giữa hai
 tay; khối ở giữa to hơn khối ở hai đầu nên chùm phình ở giữa. Chỉnh bằng
 `link_dots` và `link_speed`.
@@ -186,7 +208,17 @@ quanh các vòng, không phải cả khung hình — tiết kiệm ~8 ms/frame.
 
 Màn hình chỉ có hình webcam và hiệu ứng hạt — không hiện chữ hướng dẫn nào.
 
-Đo trong sandbox: ~17 ms/frame với 2 tay, cả hạt lẫn vòng ma pháp.
+**Về tốc độ:** ba chỗ nặng nhất đều là phép trên toàn khung hình, và cả ba đều
+được làm bằng hàm số nguyên của OpenCV thay vì đổi sang float trong numpy:
+
+| Việc | numpy float | OpenCV uint8 |
+|---|---|---|
+| Pha vùng đảo màu | ~13,7 ms | ~1,3 ms |
+| Cộng ánh sáng hạt vào khung hình | ~12,6 ms | ~6,8 ms |
+| Cộng ánh sáng vòng ma pháp | — | gộp trong 11,5 ms của `circles.draw` |
+
+Sai lệch màu trung bình giữa hai cách chưa tới 0,2/255 (mắt không thấy được).
+Tổng: ~19 ms/frame với 2 tay, đủ cả hạt, vòng lớn, chùm nối và vùng đảo màu.
 
 Tinh chỉnh ở `__init__` của `ParticleSystem`: `max_particles`, `spawn_per_tip`,
 `speed_spawn` (độ nhạy với tốc độ vung tay), `speed_scale` (nhân vận tốc ban

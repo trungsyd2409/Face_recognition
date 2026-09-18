@@ -47,6 +47,9 @@ EMITTER_FINGERS = [(1, 8), (2, 12), (3, 16), (4, 20)]
 THUMB_TIP_ID = 4
 INDEX_TIP_ID = 8
 
+# Màu riêng cho lớp hạt toả ra từ chùm nối 2 tay (BGR) - cùng tông đỏ với vòng
+LINK_COLOR = (40, 40, 255)
+
 # Landmark thuộc ngón cái (trừ điểm gốc 1, vốn nằm sát lòng bàn tay) - loại
 # khỏi lớp hạt rải quanh bàn tay để ngón cái hoàn toàn "sạch"
 THUMB_LANDMARKS = (2, 3, 4)
@@ -132,6 +135,9 @@ class ParticleSystem:
         # đầy đủ (1.0), còn hạt rải quanh bàn tay gần như không (≈0.1) để chúng
         # bám vào bàn tay thay vì bay vọt đi mất
         self.gscale = np.zeros(0, dtype=np.float32)
+        # Hạt nào thuộc chùm nối 2 tay: tô màu đỏ cố định thay vì lấy màu theo
+        # bảng màu của hệ hạt
+        self.is_link = np.zeros(0, dtype=bool)
 
         self._prev_tips = {}      # (tay, ngón) -> vị trí frame trước
         self._glow = None         # ảnh đệm phát sáng, giữ lại giữa các frame
@@ -168,6 +174,11 @@ class ParticleSystem:
             # Màu theo "tuổi": hạt mới sinh nóng sáng, hạt sắp tắt nguội và tối
             ratio = np.clip(1.0 - self.life / np.maximum(self.life_max, 1), 0, 0.999)
             colors = self._lut[(ratio * (len(self._lut) - 1)).astype(np.int32)]
+            if self.is_link.any():
+                # Hạt toả ra từ chùm nối 2 tay giữ nguyên tông đỏ, không đổi
+                # theo bảng màu của hệ hạt
+                colors = colors.copy()
+                colors[self.is_link] = LINK_COLOR
             intensity = ((self.life / np.maximum(self.life_max, 1))[:, None]
                          * self.bright[:, None] * self.brightness)
 
@@ -186,9 +197,13 @@ class ParticleSystem:
         if extra_glow is not None and extra_glow.shape == glow.shape:
             glow = glow + extra_glow
 
-        glow = cv2.resize(glow, (width, height), interpolation=cv2.INTER_LINEAR)
-        np.clip(frame.astype(np.float32) + glow, 0, 255, out=glow)
-        frame[:] = glow.astype(np.uint8)
+        # Chuyển sang uint8 NGAY ở độ phân giải nhỏ rồi mới phóng to và cộng
+        # bằng cv2.add (tự chặn trần 255). Làm phép cộng ở dạng float trên ảnh
+        # gốc tốn hơn nhiều lần mà kết quả không khác, vì phần vượt 255 đằng
+        # nào cũng bị cắt.
+        glow8 = np.clip(glow, 0, 255).astype(np.uint8)
+        glow8 = cv2.resize(glow8, (width, height), interpolation=cv2.INTER_LINEAR)
+        cv2.add(frame, glow8, dst=frame)
 
     def set_theme(self, name):
         self.theme = name
@@ -206,6 +221,7 @@ class ParticleSystem:
         self.life_max = np.zeros(0, dtype=np.float32)
         self.bright = np.zeros(0, dtype=np.float32)
         self.gscale = np.zeros(0, dtype=np.float32)
+        self.is_link = np.zeros(0, dtype=bool)
         self._prev_tips.clear()
         if self._glow is not None:
             self._glow[:] = 0
@@ -282,25 +298,68 @@ class ParticleSystem:
         if not new_pos:
             return
 
-        pos = np.concatenate(new_pos).astype(np.float32)
-        vel = np.concatenate(new_vel).astype(np.float32)
-        life = np.concatenate(new_life).astype(np.float32)
-        bright = np.concatenate(new_bright).astype(np.float32)
-        gscale = np.concatenate(new_gscale).astype(np.float32)
+        self._append(np.concatenate(new_pos),
+                     np.concatenate(new_vel),
+                     np.concatenate(new_life),
+                     np.concatenate(new_bright),
+                     np.concatenate(new_gscale),
+                     np.zeros(len(np.concatenate(new_life)), dtype=bool))
 
-        self.pos = np.concatenate([self.pos, pos])
-        self.vel = np.concatenate([self.vel, vel])
-        self.life = np.concatenate([self.life, life])
-        self.life_max = np.concatenate([self.life_max, life.copy()])
-        self.bright = np.concatenate([self.bright, bright])
-        self.gscale = np.concatenate([self.gscale, gscale])
+    def emit_link(self, point_a, point_b, amount=1.0, rate=16, speed=3.2):
+        """
+        Bắn hạt TOẢ RA hai bên từ chùm sáng nối 2 bàn tay.
 
-        # Quá nhiều hạt thì bỏ bớt những hạt cũ nhất
+        Mỗi frame chọn ngẫu nhiên vài điểm trên đoạn thẳng nối 2 tâm, rồi bắn
+        hạt theo phương VUÔNG GÓC với đoạn đó (ngẫu nhiên sang trái hoặc phải),
+        nên hạt trông như bị chùm năng lượng hất ra hai bên.
+
+        Nhóm hạt này được đánh dấu `is_link` để lúc vẽ dùng màu đỏ cố định, thay
+        vì màu theo bảng màu (lửa/băng/độc/tím) của các hạt thường.
+        """
+        p1 = np.asarray(point_a, dtype=np.float32)
+        p2 = np.asarray(point_b, dtype=np.float32)
+        direction = p2 - p1
+        length = float(np.linalg.norm(direction))
+        count = int(round(rate * amount))
+        if length < 10 or count <= 0:
+            return
+
+        direction = direction / length
+        normal = np.array([-direction[1], direction[0]], dtype=np.float32)
+
+        t = np.random.random(count).astype(np.float32)[:, None]
+        positions = p1 + (p2 - p1) * t
+        positions += normal * np.random.normal(0.0, 3.0, (count, 1)).astype(np.float32)
+
+        side = np.where(np.random.random((count, 1)) < 0.5, -1.0, 1.0).astype(np.float32)
+        strength = np.random.uniform(0.4, 1.0, (count, 1)).astype(np.float32) * speed
+        velocities = (normal * side * strength
+                      + direction * np.random.normal(0.0, 0.8, (count, 1)).astype(np.float32))
+
+        life = np.random.uniform(self.life_range[0] * 0.7,
+                                 self.life_range[1] * 0.9, count).astype(np.float32)
+        bright = np.random.uniform(0.7, 1.2, count).astype(np.float32)
+
+        self._append(positions, velocities, life, bright,
+                     np.full(count, 0.25, dtype=np.float32),
+                     np.ones(count, dtype=bool))
+
+    def _append(self, pos, vel, life, bright, gscale, is_link):
+        """Nối thêm 1 nhóm hạt mới vào các mảng, cắt bớt nếu vượt quá giới hạn."""
+        self.pos = np.concatenate([self.pos, pos.astype(np.float32)])
+        self.vel = np.concatenate([self.vel, vel.astype(np.float32)])
+        self.life = np.concatenate([self.life, life.astype(np.float32)])
+        self.life_max = np.concatenate([self.life_max, life.astype(np.float32)])
+        self.bright = np.concatenate([self.bright, bright.astype(np.float32)])
+        self.gscale = np.concatenate([self.gscale, gscale.astype(np.float32)])
+        self.is_link = np.concatenate([self.is_link, is_link])
+
         if len(self.pos) > self.max_particles:
             keep = slice(len(self.pos) - self.max_particles, None)
             self.pos, self.vel = self.pos[keep], self.vel[keep]
             self.life, self.life_max = self.life[keep], self.life_max[keep]
             self.bright, self.gscale = self.bright[keep], self.gscale[keep]
+            self.is_link = self.is_link[keep]
 
     def _spawn_palm_glow(self, hand, width, height, amount):
         """
@@ -398,3 +457,4 @@ class ParticleSystem:
             self.pos, self.vel = self.pos[alive], self.vel[alive]
             self.life, self.life_max = self.life[alive], self.life_max[alive]
             self.bright, self.gscale = self.bright[alive], self.gscale[alive]
+            self.is_link = self.is_link[alive]

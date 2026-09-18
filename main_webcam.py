@@ -3,8 +3,10 @@ main_webcam.py
 VỆT LỬA + VÒNG MA PHÁP Ở ĐẦU NGÓN TAY.
 
 - Vòng ma pháp ĐỎ phát sáng tự xoay ở mỗi đầu ngón (magic_circle.py)
-- Giơ đủ 5 ngón: 5 vòng nhỏ gộp thành 1 vòng lớn giữa lòng bàn tay, đồng thời
-  hạt rải đều khắp bàn tay làm cả bàn tay ửng sáng
+- Xoè 4 ngón (trừ ngón cái): các vòng nhỏ gộp thành 1 vòng lớn giữa lòng bàn
+  tay, đồng thời hạt rải đều khắp bàn tay làm cả bàn tay ửng sáng
+- Cả 2 tay cùng mở vòng lớn: 1 chùm đỏ nối 2 tâm, hạt đỏ toả ra hai bên chùm,
+  và vùng không gian giữa 2 tâm bị đảo màu (âm bản)
 - Hệ hạt bắn ra từ đầu ngón, tắt dần và để lại vệt sáng (particles.py)
 
 CẢ HAI CHỈ HIỆN Ở NHỮNG NGÓN ĐANG GIƠ - gập ngón nào thì ngón đó tắt, nắm tay
@@ -89,6 +91,11 @@ def main():
         draw_fingertips(frame, hands_info)
         particles.draw(frame)
         circles.draw(frame, hands_info)     # vòng ma pháp vẽ đè lên trên lớp hạt
+
+        # Chùm nối 2 tay đang hiện -> bắn thêm hạt đỏ toả ra hai bên chùm
+        if circles.link is not None:
+            point_a, point_b, strength = circles.link
+            particles.emit_link(point_a, point_b, amount=strength)
 
         # Ghi log cử chỉ tay theo 1 nhịp cố định
         if frame_count % RECOGNIZE_EVERY_N_FRAMES == 0:
