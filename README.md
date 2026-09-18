@@ -20,6 +20,7 @@ bản: nắm tay, xòe tay, thumbs up, hoặc đếm số ngón đang giơ.
 face_recognition_project/
 ├── requirements.txt      # danh sách thư viện cần cài
 ├── utils.py              # các hàm dùng chung (detect, recognize/emotion, log)
+├── slime_effect.py       # hiệu ứng slime (gel) giữa ngón cái và ngón trỏ - metaball
 ├── main_webcam.py        # chạy qua webcam thời gian thực - NHẬN DIỆN CẢM XÚC
 ├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn - nhận diện danh tính
 ├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây - dùng cho main_static.py
@@ -99,6 +100,20 @@ python main_webcam.py
   cử chỉ (vd. `Right: Xoe tay`, `Left: Thumbs up`, `Right: 2 ngon tay`).
 - Nhấn phím `q` để thoát.
 
+### Hiệu ứng slime giữa 2 ngón
+
+Ngón cái và ngón trỏ của mỗi tay biến thành 2 khối gel dính nhau (kỹ thuật
+metaball trong `slime_effect.py`):
+
+- 2 ngón gần nhau → dính thành 1 khối liền.
+- Kéo ra xa → sợi slime thắt eo lại, võng xuống theo trọng lực và rung nhẹ.
+- Kéo quá xa → sợi **đứt**, sinh vài giọt slime rơi xuống khung hình.
+- Bề mặt có khúc xạ nhẹ (ảnh nền bị bẻ cong), viền sáng và đốm sáng phản chiếu.
+
+Chỉnh nhanh ở đầu class `SlimeEffect` trong `slime_effect.py`: `gel_color` (màu),
+`break_ratio` (kéo bao xa thì đứt), `blob_ratio` (độ to của khối gel),
+`render_scale` (giảm xuống 0.4 nếu máy yếu).
+
 Nếu webcam của bạn không phải camera số 0 (máy có nhiều camera), sửa dòng
 `cv2.VideoCapture(0)` trong `main_webcam.py` thành `1`, `2`,...
 
@@ -128,6 +143,15 @@ Mở các file này bằng Excel hoặc VS Code để xem.
 - **`AttributeError: module 'cv2' has no attribute 'CascadeClassifier'`**: bạn đang
   dùng OpenCV 5.x — xem giải thích ở Bước 3.5, đảm bảo đã chạy `python download_model.py`
   và file model đã có trong `models/`.
+- **`cv2.error: ... The function is not implemented. Rebuild the library with
+  Windows, GTK+ 2.x or Cocoa support`** (lỗi ở `cv2.imshow`): trong venv đang có
+  bản OpenCV không kèm giao diện (`opencv-python-headless`, thường bị cài kèm bởi
+  thư viện khác và ghi đè lên bản thường). Sửa bằng:
+  ```bash
+  pip uninstall -y opencv-python-headless opencv-python opencv-contrib-python
+  pip install opencv-python
+  ```
+  Sau đó `pip list | findstr opencv` chỉ nên còn đúng 1 dòng `opencv-python`.
 - **"Không mở được webcam"**: kiểm tra ứng dụng khác có đang dùng camera không,
   hoặc cấp quyền camera cho terminal/VS Code trong Settings của hệ điều hành.
 - **Cài `deepface`/`tensorflow` bị lỗi**: thử nâng cấp pip trước
