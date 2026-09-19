@@ -1,24 +1,21 @@
 """
 main_webcam.py
-KÉO GIÃN / BÓP MÉO HÌNH WEBCAM BẰNG TAY (liquid warp).
+TÚM VÀ KÉO HÌNH WEBCAM BẰNG TAY (liquid warp).
 
-Hình ảnh webcam được coi như một tấm cao su: bàn tay bạn kéo, nén, phình, xoáy
-chính khung hình đó. Chi tiết cách dựng trường dịch chuyển và dùng cv2.remap
-nằm trong liquid_warp.py.
+Chụm ngón cái + ngón trỏ là "túm" lấy hình ảnh tại đúng chỗ đó, kéo tay đi thì
+mảng ảnh quanh chỗ túm bị lôi theo đầu ngón như kéo một tấm cao su. Nhả ngón ra
+thì vết méo tan dần, ảnh đàn hồi về hình cũ.
 
-Cử chỉ:
-    Chụm ngón cái + trỏ rồi kéo   -> KÉO ảnh đi theo tay (như kéo cao su)
-    Xoè cả bàn tay                -> PHÌNH ảnh ra khỏi tâm bàn tay
-    Nắm tay                       -> NÉN ảnh co vào tâm bàn tay
-    Giơ đúng 2 ngón (trỏ + giữa)  -> XOÁY ảnh quanh tâm bàn tay
+Tay để bình thường (không chụm) thì màn hình hiện y nguyên hình webcam, không
+méo chút nào. Hai tay chụm cùng lúc thì mỗi tay túm một chỗ, kéo 2 hướng khác
+nhau được.
 
-Bỏ tay ra thì ảnh tự đàn hồi về hình dạng ban đầu.
-Cả 2 tay dùng được cùng lúc, mỗi tay một kiểu biến dạng.
+Chi tiết cách dựng trường dịch chuyển và dùng cv2.remap nằm trong liquid_warp.py.
 
 Phím tắt:
     q : thoát                 r : xoá biến dạng, ảnh về nguyên trạng ngay
     e : đổi độ đàn hồi (vết méo tan nhanh / giữ lâu)
-    [ ] : thu nhỏ / mở rộng vùng ảnh hưởng của bàn tay
+    [ ] : thu nhỏ / mở rộng vùng ảnh bị kéo theo
     m : lật ảnh như soi gương (bật/tắt)
 
 Cách chạy:
@@ -34,7 +31,7 @@ from liquid_warp import LiquidWarp
 RECOGNIZE_EVERY_N_FRAMES = 15
 
 # 2 mức đàn hồi, đổi qua lại bằng phím 'e': tan nhanh <-> giữ vết lâu
-DECAY_LEVELS = [0.9, 0.98]
+DECAY_LEVELS = [0.88, 0.97]
 
 
 def main():
@@ -52,7 +49,7 @@ def main():
     mirror = True
     frame_count = 0
 
-    print("Đang chạy webcam - kéo giãn hình bằng tay. Nhấn 'q' để thoát.")
+    print("Đang chạy webcam - chụm 2 ngón rồi kéo để túm hình. Nhấn 'q' để thoát.")
 
     while True:
         ret, frame = cap.read()
@@ -70,7 +67,7 @@ def main():
         # ---- Nhận diện bàn tay ----
         hands_info = finger_hold.apply(detect_hands(frame))
 
-        # ---- Dựng trường biến dạng theo cử chỉ rồi áp lên khung hình ----
+        # ---- Cập nhật các cú túm rồi áp biến dạng lên khung hình ----
         warp.update(hands_info, frame_w, frame_h)
         frame = warp.apply(frame)
 
@@ -79,7 +76,7 @@ def main():
             for hand in hands_info:
                 log_hand_gesture(hand["gesture"])
 
-        cv2.imshow("Keo gian hinh bang tay - nhan 'q' de thoat", frame)
+        cv2.imshow("Tum va keo hinh bang tay - nhan 'q' de thoat", frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):

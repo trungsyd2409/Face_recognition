@@ -1,43 +1,49 @@
 """
 liquid_warp.py
-Kéo giãn / bóp méo chính hình ảnh webcam bằng tay, như kéo một tấm cao su.
+"Túm" lấy hình webcam bằng cách chụm ngón cái + ngón trỏ, rồi kéo đi - mảng ảnh
+quanh chỗ túm bị lôi theo đầu ngón như kéo một tấm cao su.
 
-Nguyên lý: mỗi frame ta dựng một TRƯỜNG DỊCH CHUYỂN (displacement field) - với
-mỗi điểm ảnh, trường này nói "điểm này phải lấy màu từ chỗ nào trong ảnh gốc".
-Đưa trường đó cho cv2.remap là xong:
+Chỉ có DUY NHẤT cử chỉ này tác động lên hình. Tay để bình thường (không chụm)
+thì màn hình hiện y nguyên hình webcam, không méo chút nào.
+
+---------------------------------------------------------------------------
+Cách làm: mỗi frame dựng một TRƯỜNG DỊCH CHUYỂN (displacement field) - với mỗi
+điểm ảnh, trường này nói "điểm này phải lấy màu từ chỗ nào trong ảnh gốc". Đưa
+trường đó cho cv2.remap là xong:
 
     map_x(x, y) = x + dx(x, y)
     map_y(x, y) = y + dy(x, y)
     ảnh_méo = cv2.remap(ảnh_gốc, map_x, map_y)
 
-Bàn tay tạo ra các "cọ" (brush) tác động lên trường này, mỗi cử chỉ một kiểu:
+ĐIỂM NEO - thứ làm cho ảnh dính đúng vào ngón tay:
 
-    Chụm ngón cái + trỏ rồi kéo  -> KÉO: ảnh bị lôi theo tay như cao su
-    Xoè cả bàn tay               -> PHÌNH: ảnh nở phồng ra khỏi tâm bàn tay
-    Nắm tay                      -> NÉN: ảnh bị hút co vào tâm bàn tay
-    Giơ đúng 2 ngón (trỏ + giữa) -> XOÁY: ảnh xoay tròn quanh tâm bàn tay
+    Lúc bạn vừa chụm 2 ngón, chương trình ghi lại ĐIỂM NEO = chỗ ngón tay đang
+    chụm. Sau đó, mỗi frame:
 
-Ảnh hưởng của mỗi cọ giảm dần từ tâm ra mép theo hàm (1 - (d/r)^2)^2 - bằng 1 ở
-tâm, bằng 0 đúng tại mép, nên chỉ cần tính trong một ô vuông nhỏ quanh bàn tay
-chứ không phải cả khung hình.
+        độ lệch  = vị trí ngón hiện tại - điểm neo
+        dx(p)    = -độ_lệch.x * trọng_số(p)
+        dy(p)    = -độ_lệch.y * trọng_số(p)
 
-Hai điểm khiến hiệu ứng có cảm giác "chất lỏng" chứ không phải kính lúp:
+    với trọng số bằng 1 ngay tại đầu ngón và giảm dần ra mép vùng ảnh hưởng.
+    Tại đúng đầu ngón (trọng số = 1), remap lấy màu từ điểm neo - nghĩa là mẩu
+    ảnh bạn túm lúc đầu luôn bám chặt vào đầu ngón, dù bạn kéo đi đâu.
 
-1. Trường dịch chuyển được CỘNG DỒN qua các frame, nên kéo tay đi một đoạn dài
-   thì ảnh bị kéo dài theo cả quãng đường đó, không chỉ theo vị trí hiện tại.
-2. Mỗi frame trường lại được nhân với `decay` (< 1), nên khi bỏ tay ra, ảnh từ
-   từ đàn hồi trở về hình dạng ban đầu thay vì bật lại ngay.
+    (Cách làm sai thường gặp: mỗi frame cộng thêm 1 chút dịch chuyển theo vận
+    tốc tay. Khi đó ảnh bị "trét" dần theo đường tay đi chứ chỗ túm không dính
+    đúng vào ngón, và kéo đi kéo lại thì biến dạng cứ cộng dồn mãi.)
 
-Lưu ý về 3 cử chỉ TĨNH (phình, nén, xoáy): chúng tác động đều đặn mỗi frame, nên
-nếu cộng thẳng vào trường thì giữ tay yên vài giây là ảnh bị bóp nát. Vì vậy
-phần đóng góp của chúng được nhân với (1 - decay): cộng dồn theo cấp số nhân,
-trường sẽ HỘI TỤ về đúng mức biến dạng mong muốn rồi dừng ở đó, dù bạn giữ tay
-bao lâu. Riêng cử chỉ KÉO thì vẫn cộng thẳng, vì nó vốn bị giới hạn bởi quãng
-đường tay bạn di chuyển.
+Trọng số dùng (1 - (d/r)^2)^2: bằng 1 ở tâm, bằng ĐÚNG 0 tại mép (khác hàm
+Gauss vốn không bao giờ về 0), nên ngoài vùng ảnh hưởng ảnh đứng yên tuyệt đối
+và chỉ cần tính trong một ô vuông nhỏ quanh bàn tay.
+
+NHẢ NGÓN RA: phần biến dạng của cú túm đó được chuyển sang "trường dư", và
+trường dư này mỗi frame lại nhân với `decay` (< 1) nên vết méo tan dần trong
+khoảng nửa giây - ảnh đàn hồi về hình cũ chứ không bật lại đột ngột.
 
 Trường được tính ở độ phân giải THẤP (mặc định 1/4) rồi mới phóng to: biến dạng
 vốn trơn và rộng nên không cần chi tiết, mà tính ở 1/4 độ phân giải thì rẻ hơn
-16 lần.
+16 lần. Khi không còn biến dạng nào đáng kể, hàm apply() trả thẳng ảnh gốc về,
+không chạy remap - vừa nhanh vừa đảm bảo ảnh sắc nét đúng nguyên bản.
 """
 
 import cv2
@@ -45,63 +51,66 @@ import numpy as np
 
 from utils import is_pinching
 
-PALM_ID = 9          # gốc ngón giữa - dùng làm "tâm bàn tay"
+THUMB_TIP_ID = 4
+INDEX_TIP_ID = 8
+PALM_ID = 9          # gốc ngón giữa - dùng để đo cỡ bàn tay
 WRIST_ID = 0
 
 
 class LiquidWarp:
     """
-    Kéo giãn / bóp méo hình webcam theo cử chỉ tay.
+    Kéo giãn hình webcam bằng cử chỉ chụm ngón rồi kéo.
 
     Tham số:
-        field_scale   : độ phân giải của trường dịch chuyển so với khung hình
-        decay         : mỗi frame trường còn lại bao nhiêu (đàn hồi về hình cũ).
-                        Càng gần 1 thì vết méo càng lâu tan
-        radius_ratio  : bán kính vùng ảnh hưởng, theo kích thước bàn tay
-        grab_strength : độ mạnh của cử chỉ kéo (chụm ngón)
-        bulge_strength: mức phình / nén ở trạng thái ổn định (0.35 = ±35% cỡ)
-        swirl_strength: góc xoáy ở trạng thái ổn định (radian, tại tâm bàn tay)
-        max_shift     : giới hạn dịch chuyển tối đa của 1 điểm ảnh (pixel),
-                        tránh kéo quá đà làm ảnh gập chồng lên nhau
+        field_scale  : độ phân giải của trường dịch chuyển so với khung hình
+        decay        : sau khi nhả ngón, mỗi frame vết méo còn lại bao nhiêu
+                       (càng gần 1 thì càng lâu tan)
+        radius_ratio : bán kính vùng bị kéo theo, tính theo cỡ bàn tay
+        max_shift    : giới hạn quãng kéo của 1 cú túm (pixel) - kéo quá xa thì
+                       ảnh gập chồng lên chính nó, trông như rách
     """
 
-    def __init__(self, field_scale=0.25, decay=0.9, radius_ratio=2.6,
-                 grab_strength=1.35, bulge_strength=0.35, swirl_strength=0.8,
-                 max_shift=90.0):
+    def __init__(self, field_scale=0.25, decay=0.88, radius_ratio=2.6,
+                 max_shift=260.0):
         self.field_scale = field_scale
         self.decay = decay
         self.radius_ratio = radius_ratio
-        self.grab_strength = grab_strength
-        self.bulge_strength = bulge_strength
-        self.swirl_strength = swirl_strength
         self.max_shift = max_shift
 
-        self._dx = None          # trường dịch chuyển (độ phân giải thấp)
+        self._dx = None          # trường tổng (độ phân giải thấp)
         self._dy = None
+        self._res_dx = None      # trường dư: phần còn lại sau khi nhả ngón
+        self._res_dy = None
         self._base_x = None      # lưới toạ độ gốc, dựng 1 lần
         self._base_y = None
-        self._prev_palm = {}     # tay -> vị trí tâm bàn tay ở frame trước
-        self.action = {}         # tay -> tên cử chỉ đang tác động (để tiện gỡ lỗi)
+
+        # Các cú túm đang giữ: tay -> {"anchor": điểm neo, "point": vị trí ngón
+        # hiện tại, "radius": bán kính vùng ảnh hưởng}
+        self._grabs = {}
 
     # ------------------------------------------------------------------ public
 
     def update(self, hands_info, width, height):
-        """Đọc cử chỉ của từng bàn tay và cộng thêm biến dạng vào trường."""
+        """Cập nhật các cú túm theo cử chỉ tay và dựng lại trường dịch chuyển."""
         self._ensure_field(width, height)
-
-        # Đàn hồi: mỗi frame vết méo cũ nhạt bớt đi một chút
-        self._dx *= self.decay
-        self._dy *= self.decay
-
         scale = self.field_scale
-        self.action = {}
-        seen = set()
 
+        # Vết méo cũ (của những cú túm đã nhả) nhạt dần đi
+        self._res_dx *= self.decay
+        self._res_dy *= self.decay
+
+        pinching_now = set()
         for hand in hands_info:
             handedness = hand["handedness"]
-            seen.add(handedness)
             landmarks = hand["landmarks"]
-            fingers_up = hand.get("fingers_up", [1] * 5)
+            if not is_pinching(landmarks):
+                continue
+
+            # Điểm túm = điểm giữa 2 đầu ngón cái và trỏ
+            point = np.array([
+                (landmarks[THUMB_TIP_ID].x + landmarks[INDEX_TIP_ID].x) / 2 * width,
+                (landmarks[THUMB_TIP_ID].y + landmarks[INDEX_TIP_ID].y) / 2 * height,
+            ], dtype=np.float32)
 
             palm = np.array([landmarks[PALM_ID].x * width,
                              landmarks[PALM_ID].y * height], dtype=np.float32)
@@ -111,51 +120,41 @@ class LiquidWarp:
             if hand_size < 12:
                 continue
 
-            previous = self._prev_palm.get(handedness)
-            self._prev_palm[handedness] = palm
-            velocity = palm - previous if previous is not None else np.zeros(2, np.float32)
+            pinching_now.add(handedness)
+            grab = self._grabs.get(handedness)
+            if grab is None:
+                # Vừa chụm ngón -> ghi điểm neo và chốt bán kính vùng ảnh hưởng
+                self._grabs[handedness] = {
+                    "anchor": point.copy(),
+                    "point": point,
+                    "radius": self.radius_ratio * hand_size,
+                }
+            else:
+                grab["point"] = point
 
-            radius = self.radius_ratio * hand_size * scale
-            center = palm * scale
-            total_up = sum(fingers_up)
+        # Tay nào vừa nhả ngón (hoặc biến mất) -> đẩy biến dạng sang trường dư
+        for handedness in list(self._grabs):
+            if handedness not in pinching_now:
+                grab = self._grabs.pop(handedness)
+                self._paint_grab(self._res_dx, self._res_dy, grab, scale)
 
-            # Thứ tự kiểm tra rất quan trọng: NẮM TAY phải xét TRƯỚC chụm ngón,
-            # vì lúc nắm tay thì ngón cái cũng nằm sát ngón trỏ nên is_pinching
-            # vẫn trả về True - xét sau thì nắm tay luôn bị hiểu nhầm là kéo.
-            if total_up == 0:
-                # NÉN: hút ảnh co vào tâm bàn tay
-                self._add_radial(center, radius, -self.bulge_strength)
-                self.action[handedness] = "nen"
-            elif is_pinching(landmarks):
-                # KÉO: ảnh bị lôi theo hướng tay vừa đi
-                self._add_drag(center, radius, velocity * self.grab_strength * scale)
-                self.action[handedness] = "keo"
-            elif fingers_up[1] and fingers_up[2] and total_up <= 2:
-                # XOÁY: xoay ảnh quanh tâm bàn tay
-                self._add_swirl(center, radius, self.swirl_strength)
-                self.action[handedness] = "xoay"
-            elif total_up >= 4:
-                # PHÌNH: đẩy ảnh nở ra khỏi tâm bàn tay
-                self._add_radial(center, radius, self.bulge_strength)
-                self.action[handedness] = "phinh"
-
-        for handedness in list(self._prev_palm):
-            if handedness not in seen:
-                self._prev_palm.pop(handedness, None)
-
-        # Chặn biên độ để ảnh không bị kéo quá đà, gập chồng lên chính nó
-        limit = self.max_shift * self.field_scale
-        np.clip(self._dx, -limit, limit, out=self._dx)
-        np.clip(self._dy, -limit, limit, out=self._dy)
+        # Trường tổng = các cú túm đang giữ + trường dư đang tan dần
+        self._dx[:] = self._res_dx
+        self._dy[:] = self._res_dy
+        for grab in self._grabs.values():
+            self._paint_grab(self._dx, self._dy, grab, scale)
 
     def apply(self, frame):
         """Áp trường dịch chuyển lên frame bằng cv2.remap. Trả về ảnh đã méo."""
         if self._dx is None:
             return frame
 
+        # Không có biến dạng đáng kể -> trả thẳng ảnh gốc, khỏi remap
+        limit = 0.25 * self.field_scale
+        if float(np.abs(self._dx).max()) < limit and float(np.abs(self._dy).max()) < limit:
+            return frame
+
         height, width = frame.shape[:2]
-        # Trường tính ở độ phân giải thấp -> phóng to lại, nhân hệ số cho đúng
-        # đơn vị pixel của ảnh gốc
         factor = 1.0 / self.field_scale
         dx = cv2.resize(self._dx, (width, height), interpolation=cv2.INTER_LINEAR) * factor
         dy = cv2.resize(self._dy, (width, height), interpolation=cv2.INTER_LINEAR) * factor
@@ -170,86 +169,59 @@ class LiquidWarp:
         if self._dx is not None:
             self._dx[:] = 0.0
             self._dy[:] = 0.0
-        self._prev_palm.clear()
+            self._res_dx[:] = 0.0
+            self._res_dy[:] = 0.0
+        self._grabs.clear()
+
+    @property
+    def grabbing(self):
+        """Đang có cú túm nào không (tiện để gỡ lỗi / hiện chỉ báo)."""
+        return len(self._grabs) > 0
 
     # --------------------------------------------------------------- internals
 
     def _ensure_field(self, width, height):
-        """Cấp phát trường dịch chuyển + lưới toạ độ gốc (chỉ làm 1 lần)."""
+        """Cấp phát các trường + lưới toạ độ gốc (chỉ làm 1 lần)."""
         small_w = max(8, int(width * self.field_scale))
         small_h = max(8, int(height * self.field_scale))
         if self._dx is None or self._dx.shape != (small_h, small_w):
             self._dx = np.zeros((small_h, small_w), dtype=np.float32)
             self._dy = np.zeros((small_h, small_w), dtype=np.float32)
+            self._res_dx = np.zeros((small_h, small_w), dtype=np.float32)
+            self._res_dy = np.zeros((small_h, small_w), dtype=np.float32)
         if self._base_x is None or self._base_x.shape != (height, width):
             self._base_x, self._base_y = np.meshgrid(
                 np.arange(width, dtype=np.float32),
                 np.arange(height, dtype=np.float32))
 
-    def _window(self, center, radius):
+    def _paint_grab(self, dx_field, dy_field, grab, scale):
         """
-        Ô vuông quanh 1 cọ + trọng số giảm dần từ tâm ra mép.
+        Cộng biến dạng của 1 cú túm vào trường.
 
-        Trọng số dùng (1 - (d/r)^2)^2: bằng 1 ở tâm, bằng 0 ĐÚNG tại mép (khác
-        hàm Gauss vốn không bao giờ về 0), nhờ vậy chỉ cần tính trong ô vuông
-        này, ngoài ra không ảnh hưởng gì - vừa nhanh vừa không để lại vệt.
+        Vùng ảnh hưởng đặt tại VỊ TRÍ NGÓN HIỆN TẠI (không phải điểm neo), nên
+        cả "bọng" biến dạng di chuyển theo tay bạn.
         """
-        height, width = self._dx.shape
-        radius = max(radius, 3.0)
+        offset = grab["point"] - grab["anchor"]
+        length = float(np.linalg.norm(offset))
+        if length > self.max_shift:          # kéo quá xa thì chặn lại
+            offset = offset / length * self.max_shift
+
+        center = grab["point"] * scale
+        radius = max(grab["radius"] * scale, 3.0)
+
+        height, width = dx_field.shape
         x0 = int(max(center[0] - radius, 0))
         y0 = int(max(center[1] - radius, 0))
         x1 = int(min(center[0] + radius + 1, width))
         y1 = int(min(center[1] + radius + 1, height))
         if x1 <= x0 or y1 <= y0:
-            return None
+            return
 
         gx = np.arange(x0, x1, dtype=np.float32)[None, :] - center[0]
         gy = np.arange(y0, y1, dtype=np.float32)[:, None] - center[1]
-        d2 = (gx ** 2 + gy ** 2) / (radius ** 2)
-        weight = np.clip(1.0 - d2, 0.0, 1.0) ** 2
-        return (slice(y0, y1), slice(x0, x1)), gx, gy, weight
+        weight = np.clip(1.0 - (gx ** 2 + gy ** 2) / (radius ** 2), 0.0, 1.0) ** 2
 
-    def _add_drag(self, center, radius, shift):
-        """KÉO: dịch cả vùng theo vector `shift` (ảnh bị lôi theo tay)."""
-        window = self._window(center, radius)
-        if window is None:
-            return
-        (ys, xs), _, _, weight = window
         # remap lấy màu từ toạ độ nguồn, nên muốn ảnh dịch THEO tay thì trường
-        # phải trỏ ngược lại hướng tay đi
-        self._dx[ys, xs] -= weight * float(shift[0])
-        self._dy[ys, xs] -= weight * float(shift[1])
-
-    def _add_radial(self, center, radius, strength):
-        """PHÌNH (strength > 0) hoặc NÉN (strength < 0) quanh tâm bàn tay."""
-        window = self._window(center, radius)
-        if window is None:
-            return
-        (ys, xs), gx, gy, weight = window
-        step = self._static_step()
-        self._dx[ys, xs] -= step * weight * strength * gx
-        self._dy[ys, xs] -= step * weight * strength * gy
-
-    def _add_swirl(self, center, radius, angle):
-        """XOÁY: xoay ảnh quanh tâm bàn tay, góc xoay giảm dần ra mép."""
-        window = self._window(center, radius)
-        if window is None:
-            return
-        (ys, xs), gx, gy, weight = window
-        theta = angle * weight * self._static_step()
-        cos_t, sin_t = np.cos(theta), np.sin(theta)
-        # Vị trí mới của điểm sau khi xoay, trừ đi vị trí cũ = độ dịch chuyển
-        self._dx[ys, xs] += (cos_t * gx - sin_t * gy) - gx
-        self._dy[ys, xs] += (sin_t * gx + cos_t * gy) - gy
-
-    def _static_step(self):
-        """
-        Hệ số cho các cử chỉ TĨNH (phình / nén / xoáy).
-
-        Mỗi frame trường bị nhân với `decay`, nên nếu mỗi frame cộng thêm
-        (1 - decay) lần mức mong muốn thì tổng cấp số nhân đúng bằng mức đó:
-            (1-d) * (1 + d + d^2 + ...) = (1-d) / (1-d) = 1
-        Nhờ vậy giữ tay yên bao lâu thì ảnh cũng chỉ méo tới đúng mức đã đặt
-        rồi dừng, thay vì méo mãi cho tới lúc nát ảnh.
-        """
-        return max(1.0 - self.decay, 1e-3)
+        # phải trỏ ngược lại hướng tay đã đi
+        dx_field[y0:y1, x0:x1] -= weight * float(offset[0]) * scale
+        dy_field[y0:y1, x0:x1] -= weight * float(offset[1]) * scale
