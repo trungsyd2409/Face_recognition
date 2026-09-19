@@ -20,7 +20,7 @@ bản: nắm tay, xòe tay, thumbs up, hoặc đếm số ngón đang giơ.
 face_recognition_project/
 ├── requirements.txt      # danh sách thư viện cần cài
 ├── utils.py              # các hàm dùng chung (detect, recognize/emotion, log)
-├── liquid_warp.py        # túm và kéo hình webcam bằng tay (cv2.remap)
+├── liquid_warp.py        # kéo hình webcam như kéo tấm vải (cv2.remap)
 ├── main_webcam.py        # chạy qua webcam thời gian thực - NHẬN DIỆN CẢM XÚC
 ├── main_static.py        # chạy trên 1 file ảnh hoặc video có sẵn - nhận diện danh tính
 ├── known_faces/          # bỏ ảnh mẫu (người muốn nhận diện) vào đây - dùng cho main_static.py
@@ -100,61 +100,64 @@ python main_webcam.py
   cử chỉ (vd. `Right: Xoe tay`, `Left: Thumbs up`, `Right: 2 ngon tay`).
 - Nhấn phím `q` để thoát.
 
-### Túm và kéo hình webcam bằng tay
+### Kéo hình webcam như kéo một tấm vải
 
-Chụm ngón cái + ngón trỏ là "túm" lấy hình ảnh tại đúng chỗ đó; kéo tay đi thì
-mảng ảnh quanh chỗ túm bị lôi theo đầu ngón như kéo một tấm cao su. Nhả ngón ra
-thì vết méo tan dần, ảnh đàn hồi về hình cũ.
-
-Tay để bình thường thì màn hình hiện **y nguyên** hình webcam, không méo chút
-nào. Hai tay chụm cùng lúc thì mỗi tay túm một chỗ, kéo hai hướng khác nhau.
+Hình webcam được coi như tấm vải trải trên mặt bàn. Chụm ngón cái + ngón trỏ là
+túm lấy tấm vải tại đúng chỗ đó; kéo tay đi thì **cả tấm** bị lôi theo — chỗ túm
+đi nhiều nhất, càng xa đi càng ít, 4 mép khung hình đứng yên như vải bị ghim
+đinh. Nhả tay là vải nằm yên ở chỗ mới, không đàn hồi về. Lần kéo sau túm vào
+tấm vải đang nhăn sẵn và kéo tiếp.
 
 | Cử chỉ / phím | Tác dụng |
 |---|---|
-| Chụm ngón cái + trỏ rồi kéo | Túm và kéo mảng ảnh đó theo tay |
-| Nhả ngón | Vết méo tan dần, ảnh về hình cũ |
-| `r` | Xoá biến dạng ngay lập tức |
-| `e` | Đổi độ đàn hồi (tan nhanh / giữ lâu) |
-| `[` `]` | Thu nhỏ / mở rộng vùng ảnh bị kéo theo |
+| Chụm ngón cái + trỏ rồi kéo | Túm tấm vải và kéo đi |
+| Nhả ngón | Vải nằm yên ở chỗ mới |
+| `r` | Trải phẳng lại tấm vải |
+| `[` `]` | Thu hẹp / mở rộng tầm ảnh hưởng của cú túm |
 | `m` · `q` | Bật tắt lật gương · thoát |
 
-**Cách hoạt động** (`liquid_warp.py`): mỗi frame dựng một **trường dịch chuyển**
-— với mỗi điểm ảnh, trường nói "điểm này lấy màu từ chỗ nào trong ảnh gốc" —
-rồi đưa cho `cv2.remap`:
+**Trường dịch chuyển.** Trạng thái tấm vải lưu bằng một trường `D`: với mỗi
+điểm ảnh `q` trên màn hình, `D(q)` nói điểm đó lấy màu từ chỗ nào trong ảnh gốc
+— đúng thứ `cv2.remap` cần:
 
 ```
-map_x(x, y) = x + dx(x, y)
-map_y(x, y) = y + dy(x, y)
-ảnh_méo = cv2.remap(ảnh_gốc, map_x, map_y)
+ảnh_hiển_thị(q) = ảnh_gốc(q + D(q))
 ```
 
-**Điểm neo** là thứ làm ảnh dính đúng vào ngón tay. Lúc vừa chụm ngón, chương
-trình ghi lại điểm neo = chỗ ngón đang chụm. Sau đó mỗi frame:
+**Chồng biến dạng** là phần cốt lõi và cũng là chỗ dễ làm sai nhất. Mỗi frame
+tay dịch đi `delta`. Biến dạng mới **không phải** là cộng thêm `-delta·w` vào
+`D` cũ — làm vậy thì nếp nhăn cũ đứng yên tại chỗ, trong khi lẽ ra chúng phải bị
+kéo đi cùng tấm vải. Phải **hợp** hai phép biến dạng:
 
 ```
-độ lệch = vị trí ngón hiện tại − điểm neo
-dx(p)   = −độ_lệch.x × trọng_số(p)
-dy(p)   = −độ_lệch.y × trọng_số(p)
+u(q)     = q − delta · w(q)              ← phép kéo của riêng frame này
+D_mới(q) = −delta · w(q) + D_cũ(u(q))
 ```
 
-Tại đúng đầu ngón trọng số bằng 1, nên remap lấy màu từ điểm neo — mẩu ảnh bạn
-túm lúc đầu luôn bám chặt vào đầu ngón dù kéo đi đâu. (Cách làm sai thường gặp:
-mỗi frame cộng thêm một chút dịch chuyển theo vận tốc tay — khi đó ảnh bị "trét"
-dần theo đường tay đi chứ chỗ túm không dính đúng vào ngón, và kéo đi kéo lại
-thì biến dạng cứ cộng dồn mãi.)
+Tức là trước khi cộng phần kéo mới, trường cũ phải được **lấy mẫu lại** tại
+`u(q)` — chính là remap bản thân trường dịch chuyển.
 
-Trọng số dùng `(1 − (d/r)²)²`: bằng 1 ở tâm, bằng **đúng 0** tại mép (khác hàm
-Gauss vốn không bao giờ về 0), nên ngoài vùng ảnh hưởng ảnh đứng yên tuyệt đối
-và chỉ cần tính trong một ô vuông nhỏ quanh bàn tay.
+**Trọng số `w`** quyết định cảm giác vải:
 
-Khi nhả ngón, biến dạng của cú túm đó chuyển sang "trường dư", mỗi frame nhân
-với `decay` nên tan dần trong khoảng 1–2 giây. Lúc không còn biến dạng đáng kể,
-`apply()` trả thẳng ảnh gốc về mà không chạy remap — đã kiểm tra: ảnh ra giống
-**từng điểm ảnh** với ảnh webcam gốc.
+```
+w(q) = f(khoảng cách tới đầu ngón) × b(khoảng cách tới mép khung)
+f(d) = 1 / (1 + (d/r)²)     đuôi dài, cả tấm đều bị lôi theo ít nhiều
+b    = 0 tại mép, tăng mượt vào trong (smoothstep)  → 4 cạnh bị ghim
+```
 
-Trường tính ở **1/4 độ phân giải** rồi mới phóng to (biến dạng vốn trơn, không
-cần chi tiết). Tinh chỉnh ở `__init__` của `LiquidWarp`: `radius_ratio`,
-`decay`, `max_shift` (chặn kéo quá xa làm ảnh gập chồng lên nhau), `field_scale`.
+Hàm `f` có đuôi dài là điểm khác hẳn bản trước (dùng `(1−(d/r)²)²`, về 0 hẳn ở
+mép vùng): với đuôi dài thì không còn ranh giới cứng kiểu "trong thì méo, ngoài
+thì không".
+
+**Đo kiểm** (đặt một chấm đỏ tại chỗ túm rồi kéo): sau khi kéo từ (250, 240) tới
+(470, 300), chấm đỏ nằm ở (466, 299) — lệch 4,6 px, tức mẩu vải túm bám sát đầu
+ngón. Bốn mép khung hình giống hệt ảnh gốc từng điểm ảnh. Nhả tay 40 frame sau
+ảnh không đổi. Kéo tiếp lần 2 lên (470, 120) thì chấm đỏ ở (465, 123). Tốc độ
+~4,5 ms/frame.
+
+Tinh chỉnh ở `__init__` của `LiquidWarp`: `radius_ratio` (tầm ảnh hưởng — là
+khoảng cách mà mức kéo giảm còn một nửa, không phải mép cứng), `edge_margin`
+(bề rộng dải ghim ở mép), `max_step` (chặn tay nhảy điểm), `field_scale`.
 
 Nếu webcam của bạn không phải camera số 0 (máy có nhiều camera), sửa dòng
 `cv2.VideoCapture(0)` trong `main_webcam.py` thành `1`, `2`,...

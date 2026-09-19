@@ -1,21 +1,23 @@
 """
 main_webcam.py
-TÚM VÀ KÉO HÌNH WEBCAM BẰNG TAY (liquid warp).
+KÉO HÌNH WEBCAM NHƯ KÉO MỘT TẤM VẢI (liquid warp).
 
-Chụm ngón cái + ngón trỏ là "túm" lấy hình ảnh tại đúng chỗ đó, kéo tay đi thì
-mảng ảnh quanh chỗ túm bị lôi theo đầu ngón như kéo một tấm cao su. Nhả ngón ra
-thì vết méo tan dần, ảnh đàn hồi về hình cũ.
+Hình webcam được coi như tấm vải trải trên mặt bàn. Chụm ngón cái + ngón trỏ là
+túm lấy tấm vải tại đúng chỗ đó; kéo tay đi thì cả tấm bị lôi theo - chỗ túm đi
+nhiều nhất, càng xa đi càng ít, 4 mép khung hình đứng yên như vải bị ghim đinh.
 
-Tay để bình thường (không chụm) thì màn hình hiện y nguyên hình webcam, không
-méo chút nào. Hai tay chụm cùng lúc thì mỗi tay túm một chỗ, kéo 2 hướng khác
-nhau được.
+Nhả tay ra thì vải NẰM YÊN ở chỗ mới, không đàn hồi về. Lần kéo sau túm vào tấm
+vải đang nhăn sẵn và kéo tiếp, các nếp nhăn chồng lên nhau. Bấm 'r' để trải
+phẳng lại.
+
+Tay để bình thường (không chụm) thì không có gì thay đổi. Hai tay chụm cùng lúc
+thì mỗi tay túm một chỗ, kéo hai hướng khác nhau được.
 
 Chi tiết cách dựng trường dịch chuyển và dùng cv2.remap nằm trong liquid_warp.py.
 
 Phím tắt:
-    q : thoát                 r : xoá biến dạng, ảnh về nguyên trạng ngay
-    e : đổi độ đàn hồi (vết méo tan nhanh / giữ lâu)
-    [ ] : thu nhỏ / mở rộng vùng ảnh bị kéo theo
+    q : thoát                 r : trải phẳng lại tấm vải
+    [ ] : thu hẹp / mở rộng tầm ảnh hưởng của cú túm
     m : lật ảnh như soi gương (bật/tắt)
 
 Cách chạy:
@@ -30,10 +32,6 @@ from liquid_warp import LiquidWarp
 # Chỉ ghi log cử chỉ tay mỗi N frame để tránh ghi quá nhiều dòng trùng lặp.
 RECOGNIZE_EVERY_N_FRAMES = 15
 
-# 2 mức đàn hồi, đổi qua lại bằng phím 'e': tan nhanh <-> giữ vết lâu
-DECAY_LEVELS = [0.88, 0.97]
-
-
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -45,11 +43,10 @@ def main():
     # frame, làm cử chỉ bị nhảy qua lại giữa 2 kiểu biến dạng
     finger_hold = FingerHold(hold=4)
 
-    decay_index = 0
     mirror = True
     frame_count = 0
 
-    print("Đang chạy webcam - chụm 2 ngón rồi kéo để túm hình. Nhấn 'q' để thoát.")
+    print("Đang chạy webcam - chụm 2 ngón rồi kéo tấm vải. 'r' trải phẳng, 'q' thoát.")
 
     while True:
         ret, frame = cap.read()
@@ -67,7 +64,7 @@ def main():
         # ---- Nhận diện bàn tay ----
         hands_info = finger_hold.apply(detect_hands(frame))
 
-        # ---- Cập nhật các cú túm rồi áp biến dạng lên khung hình ----
+        # ---- Kéo tấm vải theo tay rồi áp biến dạng lên khung hình ----
         warp.update(hands_info, frame_w, frame_h)
         frame = warp.apply(frame)
 
@@ -76,21 +73,17 @@ def main():
             for hand in hands_info:
                 log_hand_gesture(hand["gesture"])
 
-        cv2.imshow("Tum va keo hinh bang tay - nhan 'q' de thoat", frame)
+        cv2.imshow("Keo tam vai bang tay - nhan 'q' de thoat", frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
         elif key == ord("r"):
             warp.reset()
-        elif key == ord("e"):
-            decay_index = (decay_index + 1) % len(DECAY_LEVELS)
-            warp.decay = DECAY_LEVELS[decay_index]
-            print("Độ đàn hồi (decay):", warp.decay)
         elif key == ord("["):
-            warp.radius_ratio = max(1.0, warp.radius_ratio - 0.3)
+            warp.radius_ratio = max(0.8, warp.radius_ratio - 0.3)
         elif key == ord("]"):
-            warp.radius_ratio = min(6.0, warp.radius_ratio + 0.3)
+            warp.radius_ratio = min(8.0, warp.radius_ratio + 0.3)
         elif key == ord("m"):
             mirror = not mirror
             warp.reset()
