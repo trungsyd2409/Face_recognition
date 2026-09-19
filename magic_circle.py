@@ -26,12 +26,16 @@ nên cách này nhanh hơn khoảng 8 ms/frame.
 
 Vòng chỉ hiện ở những ngón ĐANG GIƠ.
 
-CHÙM NỐI 2 TAY: khi CẢ HAI bàn tay cùng mở vòng lớn, một chùm sáng đỏ nối thẳng
-2 tâm vòng: 1 dải sáng chạy giữa 2 tâm, trên đó có những khối hạt to trôi qua
-lại, và hạt đỏ liên tục toả ra hai bên (phần hạt do particles.py lo). Vùng
-không gian bao quanh đoạn nối còn bị ĐẢO MÀU (âm bản) - mép vùng được làm mềm
-để không thấy đường viền cắt cứng. Chùm chỉ hiện khi cả 2 tay đã gộp xong (mức
-gộp của tay yếu hơn quyết định độ đậm của chùm).
+VÙNG ÂM BẢN: vòng lớn hiện ra thì vùng không gian quanh nó bị ĐẢO MÀU (âm bản):
+
+    - 1 bàn tay mở vòng lớn  -> 1 vành âm bản bao quanh bàn tay đó, bán kính
+      `single_ratio` lần bán kính vòng lớn
+    - cả 2 tay cùng mở vòng  -> vùng âm bản kéo dài thành 1 dải nối 2 bàn tay
+
+Riêng chỗ vòng ma pháp nằm thì được CHỪA RA, không đảo màu (xem giải thích
+trong _invert_zone). Mép vùng được làm mềm nên loang dần chứ không lộ viền cắt.
+Khi 2 tay cùng mở vòng, hạt đỏ còn toả ra dọc đoạn nối 2 tâm (phần hạt do
+particles.py lo).
 
 Ngón CÁI không có vòng (và cũng không bắn hạt) - để trống hẳn.
 
@@ -120,12 +124,10 @@ class MagicCircles:
     Tham số:
         radius_ratio : bán kính vòng nhỏ ở đầu ngón, so với kích thước bàn tay
         big_ratio    : bán kính vòng lớn khi xoè đủ 4 ngón (trừ ngón trỏ)
-        link_dots    : số khối hạt trôi trên chùm nối 2 tay
-        link_speed   : tốc độ trôi của các khối hạt đó
-        invert_ratio : bề rộng vùng đảo màu quanh đoạn nối, so với bán kính vòng lớn
+        invert_ratio : bề rộng vùng đảo màu khi CẢ 2 tay mở vòng, so với bán kính vòng
+        single_ratio : bán kính vùng đảo màu khi CHỈ 1 tay mở vòng, so với bán kính vòng
+        invert_keep  : bán kính chỗ chừa ra quanh mỗi vòng ma pháp (không đảo màu)
         invert_feather: độ mềm của mép vùng đảo màu (pixel)
-        invert_gap   : bề rộng hành lang CHỪA RA dọc chùm sáng (so với bán kính
-                       vòng lớn) - xem giải thích trong _invert_zone
         merge_time   : thời gian (giây) để gộp các vòng nhỏ thành 1 vòng lớn, và ngược lại
         min_big_time : vòng lớn phải hiện ít nhất bao nhiêu giây rồi mới được
                        phép tách trở lại thành các vòng nhỏ
@@ -141,18 +143,17 @@ class MagicCircles:
     def __init__(self, radius_ratio=0.25, color=(40, 40, 255), spin_speed=0.15,
                  ticks=12, arcs=5, glow=1.25, blur=1.6,
                  big_ratio=0.85, merge_time=0.1, min_big_time=1.0,
-                 exit_delay=0.35, link_dots=7, link_speed=0.35,
-                 invert_ratio=1.6, invert_feather=11.0, invert_gap=0.5):
+                 exit_delay=0.35, invert_ratio=2.8, single_ratio=3.0,
+                 invert_keep=1.02, invert_feather=10.0):
         self.radius_ratio = radius_ratio
         self.big_ratio = big_ratio
         self.merge_time = merge_time
         self.min_big_time = min_big_time
         self.exit_delay = exit_delay
-        self.link_dots = link_dots
-        self.link_speed = link_speed
         self.invert_ratio = invert_ratio
+        self.single_ratio = single_ratio
+        self.invert_keep = invert_keep
         self.invert_feather = invert_feather
-        self.invert_gap = invert_gap
         self.link = None      # (tâm A, tâm B, độ đậm) của chùm nối ở frame vừa vẽ
         self.color = np.array(color, dtype=np.float32)
         self.spin_speed = spin_speed
@@ -250,13 +251,69 @@ class MagicCircles:
                 self._state.pop(handedness, None)
         return self._merge
 
+    def big_circles(self, hands_info, frame_shape):
+        """
+        Danh sách (tâm, bán kính, mức gộp) của các vòng lớn đang mở.
+
+        Dùng chung cho cả 2 lượt vẽ: lượt đảo màu nền (draw_invert) và lượt vẽ
+        vòng (draw).
+        """
+        height, width = frame_shape[:2]
+        result = []
+        for hand in hands_info:
+            merge = self._merge.get(hand["handedness"], 0.0)
+            if merge <= 0.03:
+                continue
+            landmarks = hand["landmarks"]
+            wrist = np.array([landmarks[WRIST_ID].x * width,
+                              landmarks[WRIST_ID].y * height], dtype=np.float32)
+            palm = np.array([landmarks[MIDDLE_MCP_ID].x * width,
+                             landmarks[MIDDLE_MCP_ID].y * height], dtype=np.float32)
+            hand_size = float(np.linalg.norm(palm - wrist))
+            radius = self.radius_ratio * hand_size
+            if radius < 5:
+                continue
+            center_ids = (WRIST_ID, 5, MIDDLE_MCP_ID, 13, 17)
+            center = np.mean([[landmarks[i].x * width, landmarks[i].y * height]
+                              for i in center_ids], axis=0).astype(np.float32)
+            big_radius = radius + (self.big_ratio * hand_size - radius) * merge
+            result.append((center, big_radius, merge))
+        return result
+
+    def draw_invert(self, frame, hands_info):
+        """
+        Lượt 1: đảo màu (âm bản) vùng quanh các vòng lớn.
+
+        Tách riêng khỏi draw() và gọi TRƯỚC khi vẽ hạt, để hạt và vòng ma pháp
+        giữ nguyên màu của chúng - chỉ có hình nền thật (bàn tay, khung cảnh)
+        mới bị đảo màu. Nếu đảo màu sau khi vẽ hạt thì vệt lửa vàng cam sẽ hoá
+        xanh lơ trong vùng đó.
+        """
+        self.link = None
+        if not self.enabled:
+            return
+
+        circles = self.big_circles(hands_info, frame.shape)
+        if len(circles) >= 2:
+            (c1, r1, m1), (c2, r2, m2) = circles[0], circles[1]
+            strength = min(m1, m2)
+            if strength > 0.55:
+                self._invert_zone(frame, [(c1, r1), (c2, r2)], strength)
+                # Báo đoạn nối 2 tâm ra ngoài để hệ hạt bắn hạt đỏ toả dọc nó
+                self.link = (c1, c2, strength)
+        elif len(circles) == 1:
+            center, radius, merge = circles[0]
+            if merge > 0.55:
+                self._invert_zone(frame, [(center, radius)], merge)
+
     def merge_amount(self, handedness):
         """Mức độ đã gộp (0..1) của 1 bàn tay - 1.0 nghĩa là đang mở vòng lớn."""
         return self._merge.get(handedness, 0.0)
 
     def draw(self, frame, hands_info):
         """
-        Vẽ vòng ma pháp của tất cả đầu ngón đang giơ lên `frame` (cộng ánh sáng).
+        Lượt 2: vẽ vòng ma pháp của tất cả đầu ngón đang giơ lên `frame` (cộng
+        ánh sáng). Gọi SAU draw_invert() và sau khi vẽ hạt.
         Trả về True nếu có vẽ vòng nào.
         """
         if not self.enabled:
@@ -268,8 +325,6 @@ class MagicCircles:
 
         self._time += self.spin_speed
         self._dirty = None          # hình chữ nhật bao quanh tất cả các vòng
-        self.link = None
-        big_circles = []            # (tâm, bán kính, mức gộp) của các vòng lớn
 
         for hand in hands_info:
             landmarks = hand["landmarks"]
@@ -311,17 +366,6 @@ class MagicCircles:
                 big_radius = radius + (self.big_ratio * hand_size - radius) * merge
                 self._stamp(tuple(palm_center), big_radius, phase=0.0,
                             intensity=merge, spin_scale=0.55, pulse=0.0)
-                big_circles.append((palm_center, big_radius, merge))
-
-        # Cả 2 tay cùng mở vòng lớn -> nối 2 tâm bằng 1 chùm hạt đỏ
-        if len(big_circles) >= 2:
-            (c1, r1, m1), (c2, r2, m2) = big_circles[0], big_circles[1]
-            strength = min(m1, m2)
-            if strength > 0.55:
-                # Đảo màu vùng giữa 2 tâm TRƯỚC, rồi mới vẽ chùm sáng đè lên
-                self._invert_zone(frame, c1, c2, min(r1, r2), strength)
-                self._draw_link(c1, c2, min(r1, r2), strength)
-                self.link = (c1, c2, strength)
 
         if self._dirty is None:
             return False
@@ -355,114 +399,83 @@ class MagicCircles:
 
     # --------------------------------------------------------------- internals
 
-    def _draw_link(self, center_a, center_b, radius, strength):
+    def _invert_zone(self, frame, circles, strength):
         """
-        Vẽ chùm sáng nối 2 tâm vòng lớn: 1 dải sáng chạy thẳng giữa 2 tâm, cộng
-        thêm vài khối hạt to trôi dọc theo nó.
+        Đảo màu (âm bản) vùng không gian quanh vòng lớn.
 
-        Các khối hạt được rải cách đều rồi cùng trôi theo thời gian (vị trí lấy
-        phần lẻ của `t`), nên nhìn như dòng năng lượng chảy từ tay này sang tay
-        kia. Khối ở giữa đường to hơn khối ở 2 đầu cho chùm trông phình ở giữa.
+        `circles` là danh sách (tâm, bán kính) của các vòng lớn đang mở:
+            - 1 phần tử  -> vùng đảo màu là hình TRÒN bán kính `single_ratio`
+              lần bán kính vòng, bao quanh bàn tay đó
+            - 2 phần tử  -> vùng đảo màu là hình BẦU DỤC kéo dài nối 2 bàn tay,
+              bề ngang `invert_ratio` lần bán kính vòng
+
+        Chỗ bản thân vòng ma pháp nằm thì được CHỪA RA (`invert_keep`), vì 2 lý
+        do: giữ đúng màu đỏ của vòng như yêu cầu, và vì cảnh webcam thường tối
+        nên đảo màu xong vùng đó sáng trắng - vòng lại vẽ theo kiểu CỘNG ánh
+        sáng, cộng lên nền đã sáng thì cháy trắng, mất hẳn màu.
+
+        Mặt nạ được làm mềm ở mép (`invert_feather`) rồi pha giữa ảnh gốc và
+        ảnh âm bản:  kết quả = gốc * (1 - m) + (255 - gốc) * m
+
+        Phép pha dùng hàm số nguyên của OpenCV (multiply/add trên ảnh uint8)
+        chứ không đổi cả vùng ảnh sang float trong numpy: vùng này khá lớn,
+        làm kiểu numpy tốn ~14 ms/frame, dùng OpenCV chỉ còn ~1,3 ms mà sai
+        lệch màu trung bình chưa tới 0,2/255.
         """
-        p1 = np.asarray(center_a, dtype=np.float32)
-        p2 = np.asarray(center_b, dtype=np.float32)
-        length = float(np.linalg.norm(p2 - p1))
-        if length < 10:
-            return
-
-        layer = self._layer
-        core_width = max(2, int(radius * 0.22 * strength))
-
-        # Dải sáng nối 2 tâm (2 lớp: lõi mảnh sáng, vỏ dày mờ hơn)
-        cv2.line(layer, tuple(np.round(p1).astype(int)), tuple(np.round(p2).astype(int)),
-                 0.45 * strength, core_width * 3, cv2.LINE_AA)
-        cv2.line(layer, tuple(np.round(p1).astype(int)), tuple(np.round(p2).astype(int)),
-                 0.95 * strength, core_width, cv2.LINE_AA)
-
-        # Các khối hạt to trôi dọc chùm
-        for k in range(self.link_dots):
-            t = (self._time * self.link_speed + k / self.link_dots) % 1.0
-            position = p1 + (p2 - p1) * t
-            # Phình ở giữa, thu nhỏ về 2 đầu
-            bulge = 0.45 + 0.55 * np.sin(np.pi * t)
-            dot_radius = max(2, int(radius * 0.30 * bulge * strength))
-            cv2.circle(layer, tuple(np.round(position).astype(int)), dot_radius,
-                       0.9 * strength, -1, cv2.LINE_AA)
-
-        pad = int(radius * 0.4) + 4
-        self._expand_dirty(int(min(p1[0], p2[0])) - pad, int(min(p1[1], p2[1])) - pad,
-                           int(max(p1[0], p2[0])) + pad, int(max(p1[1], p2[1])) + pad)
-
-    def _invert_zone(self, frame, center_a, center_b, radius, strength):
-        """
-        Đảo màu (âm bản) vùng không gian bao quanh đoạn nối 2 tâm vòng lớn.
-
-        Vùng được dựng bằng 1 hình bầu dục: trục dài nằm dọc đoạn nối, trục ngắn
-        rộng `invert_ratio` lần bán kính vòng lớn. Dọc giữa hình bầu dục đó,
-        một HÀNH LANG rộng `invert_gap` được chừa ra (không đảo màu) cho chùm
-        sáng chạy qua.
-
-        Vì sao phải chừa: cảnh webcam thường tối, đảo màu xong thì vùng đó sáng
-        trắng; chùm sáng vốn vẽ theo kiểu CỘNG ánh sáng, cộng lên nền đã sáng
-        sẵn thì cháy trắng và mất hẳn màu đỏ. Chừa hành lang ra thì chùm vẫn
-        chạy trên nền tối và giữ nguyên màu, còn 2 dải âm bản nằm hai bên.
-
-        Mặt nạ được LÀM MỜ ở mép (`invert_feather`) rồi dùng để pha giữa ảnh
-        gốc và ảnh âm bản:
-
-            kết quả = gốc * (1 - m) + (255 - gốc) * m
-
-        Nhờ pha mềm như vậy, vùng đảo màu loang dần ra chứ không lộ đường viền
-        cắt cứng, và lúc chùm mới hiện/sắp tắt (`strength` nhỏ) thì hiệu ứng
-        cũng nhạt dần chứ không bật tắt đột ngột.
-
-        Phép pha được làm bằng các hàm số nguyên của OpenCV (multiply/add trên
-        ảnh uint8) chứ không đổi cả vùng ảnh sang float trong numpy: vùng này
-        gần bằng cả khung hình, làm kiểu numpy tốn ~14 ms/frame, dùng OpenCV
-        chỉ còn ~1,3 ms mà sai lệch màu trung bình chưa tới 0,2/255.
-        """
-        p1 = np.asarray(center_a, dtype=np.float32)
-        p2 = np.asarray(center_b, dtype=np.float32)
-        delta = p2 - p1
-        length = float(np.linalg.norm(delta))
-        if length < 10:
+        if not circles:
             return
 
         height, width = frame.shape[:2]
-        half_width = max(radius * self.invert_ratio, 6.0)
-        pad = int(self.invert_feather * 2 + half_width) + 4
+        points = [np.asarray(c, dtype=np.float32) for c, _ in circles]
+        radii = [r for _, r in circles]
 
-        x0 = int(max(min(p1[0], p2[0]) - pad, 0))
-        y0 = int(max(min(p1[1], p2[1]) - pad, 0))
-        x1 = int(min(max(p1[0], p2[0]) + pad, width))
-        y1 = int(min(max(p1[1], p2[1]) + pad, height))
+        if len(circles) >= 2:
+            reach = max(radii) * self.invert_ratio
+        else:
+            reach = radii[0] * self.single_ratio
+
+        pad = int(reach + self.invert_feather * 2) + 4
+        x0 = int(max(min(p[0] for p in points) - pad, 0))
+        y0 = int(max(min(p[1] for p in points) - pad, 0))
+        x1 = int(min(max(p[0] for p in points) + pad, width))
+        y1 = int(min(max(p[1] for p in points) + pad, height))
         if x1 - x0 < 4 or y1 - y0 < 4:
             return
 
-        # Mặt nạ được dựng ở NỬA độ phân giải rồi mới phóng to: làm mờ là phần
-        # tốn nhất ở đây, tính ở nửa độ phân giải rẻ hơn khoảng 4 lần mà mép
-        # loang vốn đã mềm nên phóng to lại không hề thấy khác.
+        # Mặt nạ dựng ở NỬA độ phân giải rồi mới phóng to: làm mờ là phần tốn
+        # nhất, tính ở nửa độ phân giải rẻ hơn ~4 lần mà mép vốn đã mềm nên
+        # phóng to lại không thấy khác.
         scale = 0.5
         small_w = max(8, int((x1 - x0) * scale))
         small_h = max(8, int((y1 - y0) * scale))
         mask = np.zeros((small_h, small_w), dtype=np.float32)
+        offset = np.array([x0, y0], dtype=np.float32)
 
-        center = (((p1 + p2) / 2.0) - np.array([x0, y0], dtype=np.float32)) * scale
-        axes = (int((length / 2 + half_width * 0.5) * scale), int(half_width * scale))
-        angle = float(np.degrees(np.arctan2(delta[1], delta[0])))
-        cv2.ellipse(mask, (int(center[0]), int(center[1])), axes, angle,
-                    0, 360, 1.0, -1, cv2.LINE_AA)
+        if len(circles) >= 2:
+            p1 = (points[0] - offset) * scale
+            p2 = (points[1] - offset) * scale
+            delta = p2 - p1
+            length = float(np.linalg.norm(delta))
+            center = (p1 + p2) / 2.0
+            half_width = max(radii[0], radii[1]) * self.invert_ratio * scale
+            axes = (int(length / 2 + half_width), int(half_width))
+            angle = float(np.degrees(np.arctan2(delta[1], delta[0])))
+            cv2.ellipse(mask, (int(center[0]), int(center[1])), axes, angle,
+                        0, 360, 1.0, -1, cv2.LINE_AA)
+        else:
+            center = (points[0] - offset) * scale
+            cv2.circle(mask, (int(center[0]), int(center[1])),
+                       int(radii[0] * self.single_ratio * scale), 1.0, -1, cv2.LINE_AA)
 
-        # Xoá hành lang dọc chùm sáng ra khỏi mặt nạ (vẽ đè giá trị 0)
-        corridor = max(int(radius * self.invert_gap * scale), 1)
-        a_local = (p1 - np.array([x0, y0], dtype=np.float32)) * scale
-        b_local = (p2 - np.array([x0, y0], dtype=np.float32)) * scale
-        cv2.line(mask, tuple(np.round(a_local).astype(int)),
-                 tuple(np.round(b_local).astype(int)), 0.0, corridor * 2, cv2.LINE_AA)
+        # Chừa chỗ của từng vòng ma pháp ra (vẽ đè giá trị 0)
+        for point, radius in zip(points, radii):
+            local = (point - offset) * scale
+            cv2.circle(mask, (int(local[0]), int(local[1])),
+                       max(int(radius * self.invert_keep * scale), 1), 0.0, -1, cv2.LINE_AA)
 
         if self.invert_feather > 0:
             mask = cv2.GaussianBlur(mask, (0, 0), self.invert_feather * scale)
-        # Đổi mặt nạ sang uint8 ngay ở độ phân giải nhỏ rồi mới phóng to
+
         mask8 = np.clip(mask * strength * 255.0, 0, 255).astype(np.uint8)
         mask8 = cv2.resize(mask8, (x1 - x0, y1 - y0), interpolation=cv2.INTER_LINEAR)
         mask3 = cv2.cvtColor(mask8, cv2.COLOR_GRAY2BGR)

@@ -1,30 +1,25 @@
 """
 main_webcam.py
-VỆT LỬA + VÒNG MA PHÁP Ở ĐẦU NGÓN TAY.
+KÉO GIÃN / BÓP MÉO HÌNH WEBCAM BẰNG TAY (liquid warp).
 
-- Vòng ma pháp ĐỎ phát sáng tự xoay ở mỗi đầu ngón (magic_circle.py)
-- Xoè 4 ngón (trừ ngón cái): các vòng nhỏ gộp thành 1 vòng lớn giữa lòng bàn
-  tay, đồng thời hạt rải đều khắp bàn tay làm cả bàn tay ửng sáng
-- Cả 2 tay cùng mở vòng lớn: 1 chùm đỏ nối 2 tâm, hạt đỏ toả ra hai bên chùm,
-  và vùng không gian giữa 2 tâm bị đảo màu (âm bản)
-- Hệ hạt bắn ra từ đầu ngón, tắt dần và để lại vệt sáng (particles.py)
+Hình ảnh webcam được coi như một tấm cao su: bàn tay bạn kéo, nén, phình, xoáy
+chính khung hình đó. Chi tiết cách dựng trường dịch chuyển và dùng cv2.remap
+nằm trong liquid_warp.py.
 
-CẢ HAI CHỈ HIỆN Ở NHỮNG NGÓN ĐANG GIƠ - gập ngón nào thì ngón đó tắt, nắm tay
-lại thì tắt hết.
+Cử chỉ:
+    Chụm ngón cái + trỏ rồi kéo   -> KÉO ảnh đi theo tay (như kéo cao su)
+    Xoè cả bàn tay                -> PHÌNH ảnh ra khỏi tâm bàn tay
+    Nắm tay                       -> NÉN ảnh co vào tâm bàn tay
+    Giơ đúng 2 ngón (trỏ + giữa)  -> XOÁY ảnh quanh tâm bàn tay
 
-- Vung tay nhanh  -> hạt sinh ra nhiều hơn và bắn mạnh theo hướng vung
-- Trọng lực hướng LÊN -> hạt bốc lên như tàn lửa (đổi dấu `gravity` nếu muốn rơi)
-- Chụm ngón cái + trỏ -> các hạt bị hút về điểm chụm và xoáy tròn quanh đó
-- Cả 2 tay trong khung hình đều bắn hạt
-
-Chi tiết cách sinh hạt, vật lý và cách vẽ phát sáng nằm trong particles.py.
+Bỏ tay ra thì ảnh tự đàn hồi về hình dạng ban đầu.
+Cả 2 tay dùng được cùng lúc, mỗi tay một kiểu biến dạng.
 
 Phím tắt:
-    q : thoát                 c : đổi bảng màu (lửa / băng / độc / tím)
-    g : bật/tắt trọng lực     t : bật/tắt vệt sáng
-    x : bật/tắt vòng ma pháp  space : xoá hết hạt
-
-Màn hình chỉ có hình webcam + hiệu ứng hạt, không hiện chữ hướng dẫn nào.
+    q : thoát                 r : xoá biến dạng, ảnh về nguyên trạng ngay
+    e : đổi độ đàn hồi (vết méo tan nhanh / giữ lâu)
+    [ ] : thu nhỏ / mở rộng vùng ảnh hưởng của bàn tay
+    m : lật ảnh như soi gương (bật/tắt)
 
 Cách chạy:
     python main_webcam.py
@@ -33,23 +28,13 @@ Cách chạy:
 import cv2
 
 from utils import detect_hands, log_hand_gesture, FingerHold
-from particles import ParticleSystem
-from magic_circle import MagicCircles
+from liquid_warp import LiquidWarp
 
 # Chỉ ghi log cử chỉ tay mỗi N frame để tránh ghi quá nhiều dòng trùng lặp.
 RECOGNIZE_EVERY_N_FRAMES = 15
 
-FINGER_DOT_COLOR = (80, 80, 80)
-
-
-def draw_fingertips(frame, hands_info):
-    """Chấm mờ ở 5 đầu ngón để thấy chương trình có đang bám được tay không."""
-    height, width = frame.shape[:2]
-    for hand in hands_info:
-        for tip_id in (4, 8, 12, 16, 20):
-            lm = hand["landmarks"][tip_id]
-            cv2.circle(frame, (int(lm.x * width), int(lm.y * height)), 3,
-                       FINGER_DOT_COLOR, -1)
+# 2 mức đàn hồi, đổi qua lại bằng phím 'e': tan nhanh <-> giữ vết lâu
+DECAY_LEVELS = [0.9, 0.98]
 
 
 def main():
@@ -58,15 +43,16 @@ def main():
         print("Không mở được webcam. Kiểm tra lại thiết bị hoặc quyền truy cập camera.")
         return
 
-    particles = ParticleSystem()
-    circles = MagicCircles()
+    warp = LiquidWarp()
     # Giữ trạng thái ngón thêm vài frame: MediaPipe thỉnh thoảng đọc nhầm 1-2
-    # frame làm hiệu ứng ở ngón đó (hay gặp nhất là ngón trỏ) chớp tắt
+    # frame, làm cử chỉ bị nhảy qua lại giữa 2 kiểu biến dạng
     finger_hold = FingerHold(hold=4)
-    trail_saved = particles.trail
+
+    decay_index = 0
+    mirror = True
     frame_count = 0
 
-    print("Đang chạy webcam - vệt lửa từ đầu ngón tay. Nhấn 'q' để thoát.")
+    print("Đang chạy webcam - kéo giãn hình bằng tay. Nhấn 'q' để thoát.")
 
     while True:
         ret, frame = cap.read()
@@ -75,48 +61,42 @@ def main():
             break
 
         frame_count += 1
+        if mirror:
+            # Lật ngang cho giống soi gương - kéo tay sang phải thì ảnh cũng
+            # bị kéo sang phải, đỡ bị ngược cảm giác
+            frame = cv2.flip(frame, 1)
         frame_h, frame_w = frame.shape[:2]
 
         # ---- Nhận diện bàn tay ----
         hands_info = finger_hold.apply(detect_hands(frame))
 
-        # ---- Vòng ma pháp: cập nhật mức "gộp thành vòng lớn" TRƯỚC khi sinh
-        # hạt, để hệ hạt biết bàn tay nào đang mở vòng lớn mà rải hạt khắp tay
-        circles.update_merge(hands_info)
-        for hand in hands_info:
-            hand["palm_glow"] = circles.merge_amount(hand["handedness"])
-
-        # ---- Sinh hạt + cập nhật vật lý + vẽ ----
-        particles.update(hands_info, frame_w, frame_h)
-        draw_fingertips(frame, hands_info)
-        particles.draw(frame)
-        circles.draw(frame, hands_info)     # vòng ma pháp vẽ đè lên trên lớp hạt
-
-        # Chùm nối 2 tay đang hiện -> bắn thêm hạt đỏ toả ra hai bên chùm
-        if circles.link is not None:
-            point_a, point_b, strength = circles.link
-            particles.emit_link(point_a, point_b, amount=strength)
+        # ---- Dựng trường biến dạng theo cử chỉ rồi áp lên khung hình ----
+        warp.update(hands_info, frame_w, frame_h)
+        frame = warp.apply(frame)
 
         # Ghi log cử chỉ tay theo 1 nhịp cố định
         if frame_count % RECOGNIZE_EVERY_N_FRAMES == 0:
             for hand in hands_info:
                 log_hand_gesture(hand["gesture"])
 
-        cv2.imshow("Vet lua tu dau ngon tay - nhan 'q' de thoat", frame)
+        cv2.imshow("Keo gian hinh bang tay - nhan 'q' de thoat", frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
-        elif key == ord("c"):
-            print("Bảng màu hạt:", particles.next_theme())
-        elif key == ord("g"):
-            particles.gravity_on = not particles.gravity_on
-        elif key == ord("t"):
-            particles.trail = 0.0 if particles.trail else trail_saved
-        elif key == ord("x"):
-            circles.toggle()
-        elif key == ord(" "):
-            particles.clear()
+        elif key == ord("r"):
+            warp.reset()
+        elif key == ord("e"):
+            decay_index = (decay_index + 1) % len(DECAY_LEVELS)
+            warp.decay = DECAY_LEVELS[decay_index]
+            print("Độ đàn hồi (decay):", warp.decay)
+        elif key == ord("["):
+            warp.radius_ratio = max(1.0, warp.radius_ratio - 0.3)
+        elif key == ord("]"):
+            warp.radius_ratio = min(6.0, warp.radius_ratio + 0.3)
+        elif key == ord("m"):
+            mirror = not mirror
+            warp.reset()
 
     cap.release()
     cv2.destroyAllWindows()
